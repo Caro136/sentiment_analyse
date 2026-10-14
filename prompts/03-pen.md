@@ -1,0 +1,1 @@
+项目的PRD和SPEC均已审核确认，请调用pencil工具根据PRD的需求描述以及SPEC文档的技术约束生成舆情分析平台的UI原型图，UI原型图输出到docs目录下的sentiment_analyse.pen文件中
