@@ -3081,6 +3081,7 @@ keywords = [
     { name = "jieba" },
 ]
 llm = [
+    { name = "httpx" },
     { name = "langchain-openai" },
 ]
 multimodal = [
@@ -3097,6 +3098,7 @@ vector = [
 requires-dist = [
     { name = "aiomysql", specifier = ">=0.2" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", marker = "extra == 'llm'", specifier = ">=0.27" },
     { name = "itsdangerous", marker = "extra == 'auth'", specifier = ">=2.2" },
     { name = "jieba", marker = "extra == 'keywords'", specifier = ">=0.42" },
     { name = "langchain", marker = "extra == 'agents'", specifier = ">=0.3" },

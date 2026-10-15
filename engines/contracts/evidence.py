@@ -107,6 +107,12 @@ class EvidenceRecord:
     hotness_score: float = 0.0
     final_score: float = 0.0           # 排序得分，见 score_evidence
     cluster_id: str | None = None      # 所属聚类（调拨依据）
+    # 分析标签由 analytics 层产出后附加，**不在本层重算**（设计规格 D-08）。
+    # 带着它渲染证据块，模型才能判断「这条内容的情绪是什么」，
+    # 而不必对同一批内容再跑一遍情感判定。
+    sentiment: str = ""
+    risk_level: str = ""
+    intensity_index: float = 0.0
 
     @property
     def strength(self) -> EvidenceStrength:

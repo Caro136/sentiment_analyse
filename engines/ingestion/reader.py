@@ -62,7 +62,7 @@ class FetchResult:
 
 
 def _build_content_sql(adapter, query: FetchQuery) -> tuple[str, dict[str, Any]]:
-    conditions = ["`source_keyword` = :keyword"]
+    conditions = [_keyword_condition()]
     params: dict[str, Any] = {"keyword": query.keyword}
 
     if query.start_time is not None:
@@ -80,9 +80,25 @@ def _build_content_sql(adapter, query: FetchQuery) -> tuple[str, dict[str, Any]]
     return sql, params
 
 
+def _keyword_condition(prefix: str = "") -> str:
+    """主题关键词的匹配条件。
+
+    **双向模糊匹配**，不是精确相等：
+    数据集里的 `source_keyword` 是「新能源车购置税」，而调用方往往传更完整的
+    「新能源车购置税减免」——精确匹配会一条都召不回，而且**不报错**，
+    表现为「该主题没有数据」，很容易被误判成监测盲区。
+
+    两个方向都要覆盖：查询词包含数据里的关键词（前者是后者的细化），
+    或数据里的关键词包含查询词（反之）。
+    """
+    column = f"{prefix}`source_keyword`" if prefix else "`source_keyword`"
+    return (f"(:keyword LIKE CONCAT('%', {column}, '%') "
+            f"OR {column} LIKE CONCAT('%', :keyword, '%'))")
+
+
 def _build_comment_sql(adapter, query: FetchQuery) -> tuple[str, dict[str, Any]]:
     """评论通过 JOIN 父内容表取——评论表本身没有主题关键词字段。"""
-    conditions = ["p.`source_keyword` = :keyword"]
+    conditions = [_keyword_condition("p.")]
     params: dict[str, Any] = {"keyword": query.keyword}
 
     if query.start_time is not None:

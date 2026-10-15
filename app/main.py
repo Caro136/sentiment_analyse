@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import health
+from app.routers.sse import router as events_router
 from engines.common.logging import logger, mask_url_credentials, setup_logging
 from engines.contracts.config import get_settings
 
@@ -50,7 +51,17 @@ def _log_startup_diagnostics() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _log_startup_diagnostics()
+
+    # SSE 广播跟随应用生命周期启停：启动时订阅事件总线，关闭时清理连接。
+    # 放在 lifespan 而不是模块导入时，是为了让测试能反复创建/销毁应用。
+    from app.services.realtime import get_broadcaster
+
+    broadcaster = get_broadcaster()
+    broadcaster.start()
+
     yield
+
+    broadcaster.stop()
     logger.info("{} 已关闭", APP_TITLE)
 
 
@@ -74,6 +85,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
+    app.include_router(events_router)
 
     # 业务路由将按任务逐步注册：
     #   T-19 认证  T-21 监测配置  T-22 内容查询  T-23 事件与溯源

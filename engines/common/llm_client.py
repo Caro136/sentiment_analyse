@@ -158,6 +158,10 @@ class LLMClient:
         self._retry = retry or DEFAULT_RETRY
         self._chat_model: Any = None
         self.call_count = 0
+        # 该模型是否已知不支持结构化输出。首次失败后记住，
+        # 后续直接走降级路径——否则每次调用都要先撞一次注定失败的 tool_choice，
+        # 白等一个来回（实测这一步让章节生成慢了近一倍）。
+        self._structured_unsupported = False
 
     # ------------------------------------------------------------------
     # 构造
@@ -241,16 +245,20 @@ class LLMClient:
         messages = self._build_messages(prompt, system)
         started = time.monotonic()
 
-        try:
-            structured = self._model().with_structured_output(
-                schema, method="function_calling")
-            result = await structured.ainvoke(messages)
-        except Exception as exc:  # noqa: BLE001
-            if not _is_structured_output_unsupported(exc):
-                raise
-            logger.info("角色 {} 的模型 {} 不支持结构化输出，降级为 JSON 文本解析",
-                        self.role, self.model_name)
+        if self._structured_unsupported:
             result = await self._object_via_text(prompt, schema, system)
+        else:
+            try:
+                structured = self._model().with_structured_output(
+                    schema, method="function_calling")
+                result = await structured.ainvoke(messages)
+            except Exception as exc:  # noqa: BLE001
+                if not _is_structured_output_unsupported(exc):
+                    raise
+                self._structured_unsupported = True
+                logger.info("角色 {} 的模型 {} 不支持结构化输出，"
+                            "后续调用直接走 JSON 文本解析", self.role, self.model_name)
+                result = await self._object_via_text(prompt, schema, system)
 
         self.call_count += 1
         self._log_call("object", started, str(result)[:200])

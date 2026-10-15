@@ -22,7 +22,9 @@ dependencies = [
 # 安装示例： uv sync --extra agents --extra analytics
 [project.optional-dependencies]
 # T-04 模型客户端（OpenAI 兼容协议）。agents 组会连带安装它。
-llm = ["langchain-openai>=0.2"]
+# httpx 用于公域搜索适配器直连各家搜索 API（langchain-openai 虽会传递带入，
+# 但直接使用它就该显式声明，避免上游换实现时被动断掉）。
+llm = ["langchain-openai>=0.2", "httpx>=0.27"]
 agents = ["langgraph>=0.2", "langchain>=0.3", "langchain-openai>=0.2"]
 analytics = ["numpy>=1.26", "scikit-learn>=1.5"]
 # 关键词提取（词云）。单独成组：jieba 只有源码包，
