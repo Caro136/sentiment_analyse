@@ -27,6 +27,7 @@ from engines.common.logging import logger, mask_secret
 from engines.common.runtime.concurrency import DEFAULT_LIMIT, gather_limited
 from engines.contracts.config import get_settings
 from engines.contracts.content import AnalysisLabel, UnifiedContent
+from engines.contracts.enums import Sentiment
 
 # 模型版本标识：写入分析结果，便于在模型/Prompt 调整后识别历史标签的生成来源
 MODEL_VERSION = "analytics-v1"
@@ -98,6 +99,7 @@ async def _analyze(contents: Sequence[UnifiedContent], session: AsyncSession | N
                    fingerprints: dict[str, int] | None,
                    bot_account_ids: set[str] | None,
                    max_concurrency: int, skip_analyzed: bool,
+                   topic_id: str | None = None,
                    client=None) -> AnalysisResult:
     settings = get_settings()
     weights = settings.intensity_weights
@@ -176,7 +178,8 @@ async def _analyze(contents: Sequence[UnifiedContent], session: AsyncSession | N
         payloads.append(_to_payload(
             content, label,
             fingerprint=fingerprints.get(content.content_uid),
-            is_bot=is_bot, analyzed_at=analyzed_at))
+            is_bot=is_bot, analyzed_at=analyzed_at,
+            topic_id=topic_id))
 
     if labels:
         stats.avg_intensity = round(intensity_sum / len(labels), 4)
@@ -196,6 +199,7 @@ async def analyze_contents(
     bot_account_ids: set[str] | None = None,
     max_concurrency: int = DEFAULT_LIMIT,
     skip_analyzed: bool = True,
+    topic_id: str | None = None,
     client=None,
     persist: bool = True,
 ) -> AnalysisResult:
@@ -203,6 +207,8 @@ async def analyze_contents(
 
     `fingerprints` 与 `bot_account_ids` 来自接入流程（去重与水军识别结果），
     传入后一并写入分析表——它们是多模态与风险判定的输入。
+    `topic_id` 是**这一批内容归属的监测主题**：写进标签表，并随事件传给预警引擎
+    （不传也能跑，但主题筛选与按主题的规则评估会失去依据）。
     `client` 用于注入模型客户端（测试替身或自定义配置）。
     `persist=False` 时只分析不落库，用于试跑与单测。
     """
@@ -212,6 +218,7 @@ async def analyze_contents(
                               bot_account_ids=bot_account_ids,
                               max_concurrency=max_concurrency,
                               skip_analyzed=False,
+                              topic_id=topic_id,
                               client=client)
 
     if session is not None:
@@ -220,6 +227,7 @@ async def analyze_contents(
                                 bot_account_ids=bot_account_ids,
                                 max_concurrency=max_concurrency,
                                 skip_analyzed=skip_analyzed,
+                                topic_id=topic_id,
                                 client=client)
     else:
         async with session_scope() as own_session:
@@ -228,7 +236,29 @@ async def analyze_contents(
                                     bot_account_ids=bot_account_ids,
                                     max_concurrency=max_concurrency,
                                     skip_analyzed=skip_analyzed,
+                                    topic_id=topic_id,
                                     client=client)
 
     logger.info("认知分析完成 | {}", result.stats.render())
+    _publish_labeled(result, topic_id=topic_id)
     return result
+
+
+def _publish_labeled(result: AnalysisResult, *, topic_id: str | None) -> None:
+    """通告「这批内容已打标」，驱动预警扫描（T-24 的事件驱动链路）。
+
+    发布点放在这里而不是调用方：忘了发的后果是**预警静默失效**——内容照样入库、
+    大盘照样更新，就是一条告警都不出来（设计规格 8.2 要求告警检测是事件驱动而非轮询）。
+
+    事件只带标识与主题，不带标签内容（订阅方自己去分析区读）。发布是同步 O(1) 的：
+    订阅方只入队，扫描由它自己的 worker 协程做（见 `alerting/listener.py`）。
+    """
+    from engines.common.eventing.publishers import publish_content_labeled
+
+    if not result.labels:
+        return
+    publish_content_labeled(
+        [label.content_uid for label in result.labels],
+        topic_ids=[topic_id] if topic_id else [],
+        negative_count=sum(1 for label in result.labels
+                           if label.sentiment == Sentiment.NEGATIVE.value))

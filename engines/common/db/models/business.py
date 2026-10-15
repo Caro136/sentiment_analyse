@@ -303,3 +303,26 @@ class TaskRun(Base):
     duration_ms: Mapped[int | None] = mapped_column(BigInteger)
     input_summary: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class DashboardMetric(Base):
+    """大盘指标物化：同一 (metric_key, scope, bucket) 只保留最新一份。
+
+    `scope` 用 `all` 表示全局而非 NULL——MySQL 唯一索引里 NULL 互不相等，
+    用 NULL 会让 upsert 每次都插新行（见 DDL 注释）。
+    """
+
+    __tablename__ = "dashboard_metrics"
+    __table_args__ = (
+        Index("uk_dashboard_metric", "metric_key", "scope", "bucket", unique=True),
+        Index("ix_dashboard_metrics_expires", "expires_at"),
+        {"comment": "大盘指标物化"},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    metric_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope: Mapped[str] = mapped_column(String(80), nullable=False, default="all")
+    bucket: Mapped[str] = mapped_column(String(16), nullable=False, default="static")
+    payload: Mapped[str] = mapped_column(MEDIUMTEXT, nullable=False)
+    computed_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)

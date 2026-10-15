@@ -36,7 +36,7 @@ DROP TABLE IF EXISTS `audit_log`;
 CREATE TABLE `audit_log` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `user_id` varchar(64) NULL DEFAULT NULL COMMENT '操作人',
-  `action` varchar(64) NOT NULL COMMENT '动作：login/config_update/ticket_flow/report_export/risk_override',
+  `action` varchar(64) NOT NULL COMMENT '动作：login/user_create/user_update/user_reset_password/config_update/risk_override/alert_ack/ticket_flow/draft_adopt/report_generate/report_export/data_reset（取值见 contracts/enums.py 的 AuditAction）',
   `target` varchar(255) NULL DEFAULT NULL COMMENT '操作对象',
   `before_value` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL COMMENT '变更前值',
   `after_value` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL COMMENT '变更后值',
@@ -231,5 +231,28 @@ CREATE TABLE `task_run` (
   INDEX `ix_task_run_type_time`(`task_type`, `started_at`) USING BTREE,
   INDEX `ix_task_run_status`(`status`) USING BTREE
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic COMMENT = '任务运行状态';
+
+-- ----------------------------
+-- 大盘指标物化（对应 PRD FR-36~FR-41；设计规格 8.2「大盘聚合结果定时物化」）
+--
+-- 两个刻意的设计：
+--   1. `scope` 用 'all' 表示全局而**不用 NULL**——MySQL 唯一索引里 NULL 互不相等，
+--      用 NULL 会让 upsert 每次都插新行，物化表越滚越大；
+--   2. 同一 (metric_key, scope, bucket) 只保留最新一份（覆盖式）：大盘要的是「现在」，
+--      历史指标应查原始表而不是这张缓存表。
+-- ----------------------------
+DROP TABLE IF EXISTS `dashboard_metrics`;
+CREATE TABLE `dashboard_metrics` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `metric_key` varchar(64) NOT NULL COMMENT '指标键：overview/volume_trend/sentiment_distribution/source_distribution/hot_words',
+  `scope` varchar(80) NOT NULL DEFAULT 'all' COMMENT '数据范围：all 为全局，或主题业务ID',
+  `bucket` varchar(16) NOT NULL DEFAULT 'static' COMMENT '时间粒度：hour/day；非时序指标用 static',
+  `payload` mediumtext CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '指标内容（JSON）',
+  `computed_at` bigint NOT NULL COMMENT '计算时间戳',
+  `expires_at` bigint NOT NULL COMMENT '过期时间戳，超过即视为需刷新',
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE INDEX `uk_dashboard_metric`(`metric_key`, `scope`, `bucket`) USING BTREE,
+  INDEX `ix_dashboard_metrics_expires`(`expires_at`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic COMMENT = '大盘指标物化';
 
 SET FOREIGN_KEY_CHECKS = 1;

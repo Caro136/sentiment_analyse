@@ -3,7 +3,7 @@
 三个脚本的分工：
   1. `data/sql/00_schema.sql`           原始区 9 张表（项目只读，由数据生成器产出）
   2. `sql/analysis/01_analysis_schema.sql`  分析区 9 张表
-  3. `sql/business/01_business_schema.sql`  业务区 13 张表
+  3. `sql/business/01_business_schema.sql`  业务区 14 张表
 
 ⚠️ 三个脚本均含 `DROP TABLE IF EXISTS`——**执行会清空同名的已有表**。
    本工具默认先做"库是否已存在"检查，已存在时要求显式 `--force` 才继续。
@@ -39,7 +39,7 @@ DATA_FILES = [
 ]
 
 # 建表脚本中会创建的表（用于执行后核对）
-EXPECTED_TABLES = 31
+EXPECTED_TABLES = 32
 
 
 def connect(settings, database: str | None = None) -> pymysql.connections.Connection:

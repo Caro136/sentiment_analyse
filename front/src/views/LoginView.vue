@@ -2,8 +2,8 @@
 /**
  * 登录页。
  *
- * 开发环境下后端认证（T-19）尚未就绪时，auth store 会建立本地会话，
- * 便于查看页面骨架；生产构建中该回退不会生效。
+ * 凭据由后端（T-19）校验，成功后下发 HttpOnly Cookie；前端只缓存用户信息副本。
+ * 演示账号见 README「认证与权限」一节（或 `python -m app.services.auth.seed` 的输出）。
  */
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'

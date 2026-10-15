@@ -13,6 +13,8 @@ front/dist/
 .idea/
 .vscode/
 
-.env.example
 .gitignore
 data/
+CLAUDE.md
+VibecodingContexts.md
+.env.example

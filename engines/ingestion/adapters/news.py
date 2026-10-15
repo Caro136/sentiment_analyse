@@ -29,6 +29,8 @@ class NewsAdapter(SourceAdapter):
     parent_field: ClassVar[str] = "article_id"
     comment_business_field: ClassVar[str] = "comment_id"
 
+    search_fields = ("title", "content")
+
     def _text_of(self, row: Mapping[str, Any]) -> tuple[str, str]:
         return to_str(row.get("title")), to_str(row.get("content"))
 
@@ -57,3 +59,19 @@ class NewsAdapter(SourceAdapter):
     def account_lookup_key(self, row: Mapping[str, Any]) -> str:
         """新闻按媒体名匹配账号表——原始表里没有其他可用于关联的标识。"""
         return to_str(row.get("media_name"))
+
+    def _comment_author_of(self, row: Mapping[str, Any]) -> Author:
+        """新闻评论的作者是**读者**：按个人账号三件套取（`nickname` / `user_id`）。
+
+        不能沿用内容行的 `media_name` 规则——评论行里没有这个字段，
+        结果是昵称全空、认证被标成「媒体」。
+        """
+        return self._person_author(row)
+
+    def comment_account_lookup_key(self, row: Mapping[str, Any]) -> str:
+        """**新闻评论的作者是读者**，有 `user_id`，按它匹配账号表。
+
+        不能沿用内容行的媒体名匹配：评论区所有人会被当成同一个媒体，
+        粉丝量与影响力也就全错了（新闻评论行里根本没有 media_name）。
+        """
+        return to_str(row.get("user_id"))

@@ -86,6 +86,8 @@ CREATE TABLE `event` (
   `total_volume` int NOT NULL DEFAULT 0 COMMENT '总声量',
   `negative_ratio` decimal(5,4) NULL DEFAULT NULL COMMENT '负面率',
   `status` varchar(16) NOT NULL DEFAULT 'monitoring' COMMENT '状态：monitoring/alerting/handling/resolved',
+  `manual_override` tinyint NOT NULL DEFAULT 0 COMMENT '风险等级是否被人工复核覆盖（FR-24）',
+  `override_reason` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL COMMENT '人工复核理由（manual_override=1 时必填）',
   `created_at` bigint NOT NULL COMMENT '创建时间戳',
   PRIMARY KEY (`id`) USING BTREE,
   UNIQUE INDEX `uk_event_event_id`(`event_id`) USING BTREE,

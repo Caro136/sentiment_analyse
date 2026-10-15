@@ -215,6 +215,57 @@ class AdapterMappingTest(unittest.TestCase):
         self.assertEqual(content.published_at, 0)
 
 
+class CommentAuthorTest(unittest.TestCase):
+    """评论作者与内容作者的规则可能不同，必须分开取。
+
+    新闻门户是唯一的差异平台：内容作者是媒体机构（`media_name`），
+    评论作者是读者（`nickname` / `user_id`）。混用会让评论区所有人
+    变成「媒体（空昵称）」——实测症状是簇代表言论显示成「（空昵称）」，
+    且新闻评论被溯源误判成媒体跟进节点。
+    """
+
+    def test_news_comment_author_is_reader(self) -> None:
+        from engines.ingestion.adapters.news import NewsAdapter
+
+        adapter = NewsAdapter()
+        comment = adapter.to_comment({"comment_id": "1", "article_id": "9",
+                                      "content": "评论正文", "nickname": "山间不困",
+                                      "user_id": "u632270267288"})
+        article = adapter.to_content({"id": 9, "title": "标题", "content": "正文",
+                                      "media_name": "财新网", "author": "记者甲"})
+
+        self.assertEqual(comment.author.nickname, "山间不困")
+        self.assertEqual(comment.author.account_id, "u632270267288")
+        self.assertNotEqual(comment.author.verified_type, "媒体")   # 读者不是媒体
+        self.assertEqual(article.author.nickname, "财新网")
+        self.assertEqual(article.author.verified_type, "媒体")
+
+    def test_news_account_lookup_keys_differ(self) -> None:
+        from engines.ingestion.adapters.news import NewsAdapter
+
+        adapter = NewsAdapter()
+        self.assertEqual(adapter.account_lookup_key({"media_name": "财新网"}), "财新网")
+        self.assertEqual(
+            adapter.comment_account_lookup_key({"user_id": "u1", "nickname": "网友"}), "u1")
+
+    def test_other_adapters_share_one_rule(self) -> None:
+        """其余三个平台的内容与评论规则相同（论坛用 author_id/author_nickname）。
+
+        断言的是「评论取键与内容取键一致」这个不变量，而不是具体字段名——
+        论坛的作者字段名本就与其他平台不同，那属于内容层的既有差异。
+        """
+        row = {"user_id": "u1", "nickname": "某人",
+               "author_id": "a9", "author_nickname": "楼主"}
+        for adapter in all_adapters():
+            if adapter.source_type is SourceType.NEWS:
+                continue
+            with self.subTest(table=adapter.comment_table):
+                self.assertEqual(adapter.comment_account_lookup_key(row),
+                                 adapter.account_lookup_key(row))
+                self.assertEqual(adapter._comment_author_of(row).nickname,
+                                 adapter._author_of(row).nickname)
+
+
 class RegistryTest(unittest.TestCase):
     def test_all_four_sources_registered(self) -> None:
         self.assertEqual(len(all_adapters()), 4)

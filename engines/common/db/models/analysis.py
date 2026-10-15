@@ -92,6 +92,11 @@ class Event(Base):
     total_volume: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     negative_ratio: Mapped[float | None] = mapped_column(Numeric(5, 4))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="monitoring")
+    # FR-24 人工复核：`risk_level` 被人工改写时置 1，理由必填。
+    # 算法原始结论不另存一列——它每次都由关联内容现算（见 app/services/event），
+    # 因此天然「保留双份记录」：表里是人工值，算出的是算法值。
+    manual_override: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    override_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 

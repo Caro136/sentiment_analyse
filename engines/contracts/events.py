@@ -35,6 +35,10 @@ class EventType(str, Enum):
     ROLE_ERROR = "role_error"
     SECTION_READY = "section_ready"
     HOST_DISCUSSION_MESSAGE = "host_discussion_message"
+    # 第 6 类：内容打标完成。前五类是研判链路的运行时事件，
+    # 这一类是**业务事实**——预警引擎靠它做事件驱动的规则匹配（设计规格 7.1/8.2：
+    # 告警检测是事件驱动而非轮询）。它不是给前端看的，因此不进 SSE 白名单。
+    CONTENT_LABELED = "content_labeled"
 
 
 class BaseEvent(BaseModel):
@@ -124,6 +128,25 @@ class HostDiscussionMessageEvent(BaseEvent):
     is_final: bool = Field(default=False, description="是否最终裁判结论")
 
 
+class ContentLabeledEvent(BaseEvent):
+    """内容打标完成——**预警引擎的触发源**（设计规格 7.1）。
+
+    载荷只带「哪些内容被打标了」与它们的主题归属，不带标签内容本身：
+    订阅方（`engines/alerting/listener.py`）自己去分析区读标签。
+    这样事件保持在几十字节量级，也不必在事件里重复一份标签数据（会有两个事实源）。
+
+    `topic_ids` 可能为空（打标时未指定主题）——那时的告警按「未归属主题」处理。
+    """
+
+    event_type: ClassVar[EventType] = EventType.CONTENT_LABELED
+
+    source: str = Field(default="analytics", description="发布方，固定为 analytics")
+    content_uids: tuple[str, ...] = Field(default=(), description="本次打标的内容标识")
+    topic_ids: tuple[str, ...] = Field(default=(), description="涉及的主题标识")
+    negative_count: int = Field(default=0, description="其中负向条数（供订阅方快速判断）")
+    analyzed_at: int = Field(default_factory=_now_ts)
+
+
 # 事件类型 → 模型类，供反序列化与订阅端做类型校验
 EVENT_MODELS: dict[EventType, type[BaseEvent]] = {
     EventType.ROLE_PROGRESS: RoleProgressEvent,
@@ -131,4 +154,5 @@ EVENT_MODELS: dict[EventType, type[BaseEvent]] = {
     EventType.ROLE_ERROR: RoleErrorEvent,
     EventType.SECTION_READY: SectionReadyEvent,
     EventType.HOST_DISCUSSION_MESSAGE: HostDiscussionMessageEvent,
+    EventType.CONTENT_LABELED: ContentLabeledEvent,
 }

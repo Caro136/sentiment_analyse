@@ -31,7 +31,7 @@ CONSOLE_FORMAT = (
 
 FILE_FORMAT = (
     "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[role]} | "
-    "{name}:{function}:{line} | {message}"
+    "{extra[trace_id]} | {name}:{function}:{line} | {message}"
 )
 
 # 匹配常见的密钥形态：sk-xxx、Bearer xxx、长随机串赋值
@@ -69,8 +69,14 @@ def mask_url_credentials(url: str) -> str:
 
 
 def _patch_record(record) -> None:
-    """为所有日志记录补默认 role 字段，避免格式化时 KeyError。"""
+    """为所有日志记录补默认字段，避免格式化时 KeyError。
+
+    `trace_id` 由接入层的中间件通过 `logger.contextualize()` 注入
+    （见 `app/observability.py`）；引擎层的日志不需要知道它存在，
+    只要在请求上下文中打印，就会自动带上同一个 id。
+    """
     record["extra"].setdefault("role", "-")
+    record["extra"].setdefault("trace_id", "-")
 
 
 class InterceptHandler(logging.Handler):

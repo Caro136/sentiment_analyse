@@ -79,8 +79,14 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
+
+  // 本地没有用户副本时先问一次后端：刷新/新标签页会清空 sessionStorage，
+  // 但 HttpOnly Cookie 可能仍然有效（后端 T-19 起会话票据只存在 Cookie 里）。
+  if (!auth.isAuthenticated) {
+    await auth.restore()
+  }
 
   if (!to.meta.public && !auth.isAuthenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }

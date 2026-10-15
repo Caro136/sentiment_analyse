@@ -25,6 +25,8 @@ class WeiboAdapter(SourceAdapter):
     parent_field: ClassVar[str] = "note_id"
     comment_business_field: ClassVar[str] = "comment_id"
 
+    search_fields = ("content",)
+
     def _text_of(self, row: Mapping[str, Any]) -> tuple[str, str]:
         # 微博没有独立标题，正文即全部内容
         return "", to_str(row.get("content"))

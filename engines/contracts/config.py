@@ -162,10 +162,12 @@ class Settings(BaseSettings):
     alert_mail_to: str = ""
 
     # ---------------- 舆情烈度指数权重（决定风险分级）----------------
-    intensity_w_negative: float = 0.50
-    intensity_w_volume: float = 0.30
-    intensity_w_kol: float = 0.12
-    intensity_w_sensitive: float = 0.15
+    # 约束到 [0, 1]：这四个值经 /api/v1/config 可热更新，一个 1.5 之类的取值会让
+    # 烈度指数整体越界、风险分级失去意义（PRD Q1 的权重只有相对意义）
+    intensity_w_negative: float = Field(default=0.50, ge=0.0, le=1.0)
+    intensity_w_volume: float = Field(default=0.30, ge=0.0, le=1.0)
+    intensity_w_kol: float = Field(default=0.12, ge=0.0, le=1.0)
+    intensity_w_sensitive: float = Field(default=0.15, ge=0.0, le=1.0)
 
     # ---------------- 报告产物目录 ----------------
     # 留空则回落到项目内默认路径（见下方 model_post_init）
@@ -174,9 +176,19 @@ class Settings(BaseSettings):
     insight_report_dir: str = ""
     media_report_dir: str = ""
 
+    # ---------------- 数据留存（FR-74）----------------
+    # 分析结果的保留天数。原始区不受它影响——原始表是数据生成器的交付物，
+    # ADR-03 规定本项目只读，「原始数据的留存」由重新生成数据集来管理。
+    analysis_retention_days: int = 180
+
     # ---------------- 会话 ----------------
     session_secret: str = ""
     session_max_age_seconds: int = 8 * 3600
+    session_cookie_name: str = "sentiment_session"
+    # 生产走 HTTPS 时必须置 true（否则票据在网络中以明文传输）。
+    # 默认 false 是为了本地 http 演示：置 true 会让浏览器直接丢弃 Cookie，
+    # 表现为「登录成功却立刻又要登录」。
+    session_cookie_secure: bool = False
 
     def model_post_init(self, __context) -> None:  # noqa: D105
         """把留空的目录配置回落到项目内默认路径。

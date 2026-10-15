@@ -3,6 +3,10 @@
  *
  * 会话放在 sessionStorage 而非 localStorage：舆情平台的访问权限通常按值班时段划分，
  * 关掉标签页即失效比"永久记住"更符合使用场景，也降低共享设备上的风险。
+ *
+ * 真正的凭据是后端下发的 HttpOnly Cookie（前端读不到，也不该读）；
+ * sessionStorage 里存的只是**用户信息副本**，用于避免每次导航都请求 `/auth/me`。
+ * 因此恢复登录态以 `restore()` 为准：本地没有副本时问后端要。
  */
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
@@ -24,6 +28,8 @@ function readSession(): UserInfo | null {
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserInfo | null>(readSession())
   const loading = ref(false)
+  /** 是否已尝试过用 Cookie 恢复会话（避免每次导航都问一次后端） */
+  const restoreAttempted = ref(false)
 
   const isAuthenticated = computed(() => user.value !== null)
   const role = computed<UserRole | undefined>(() => user.value?.role)
@@ -51,23 +57,30 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(payload: LoginPayload): Promise<void> {
     loading.value = true
     try {
-      const info = await authApi.login(payload)
-      persist(info)
-    } catch (error) {
-      // 开发期后端认证（T-19）尚未就绪时，允许本地建立会话以便查看页面骨架。
-      // 生产构建中 import.meta.env.DEV 为 false，这段代码不会生效。
-      if (import.meta.env.DEV) {
-        persist({
-          user_id: 'dev-user',
-          username: payload.username,
-          display_name: `${payload.username}（开发会话）`,
-          role: 'admin',
-        })
-        return
-      }
-      throw error
+      persist(await authApi.login(payload))
+      restoreAttempted.value = true
     } finally {
       loading.value = false
+    }
+  }
+
+  /**
+   * 用后端 Cookie 恢复登录态。
+   *
+   * 场景：刷新或新开标签页后 sessionStorage 为空，但 HttpOnly Cookie 仍有效。
+   * 返回是否已登录；只在首次调用时真正请求后端。
+   */
+  async function restore(): Promise<boolean> {
+    if (user.value) return true
+    if (restoreAttempted.value) return false
+    restoreAttempted.value = true
+    try {
+      persist(await authApi.currentUser())
+      return true
+    } catch {
+      // 401 是这里的正常路径（没登录或会话已失效），拦截器已处理跳转
+      persist(null)
+      return false
     }
   }
 
@@ -78,6 +91,8 @@ export const useAuthStore = defineStore('auth', () => {
       // 后端不可达时也要让本地登出成功——否则用户会卡在已登录状态出不去
     } finally {
       persist(null)
+      // 允许下次进入时再问一次后端，否则登出后换账号登录会因缓存标志而不去恢复
+      restoreAttempted.value = false
     }
   }
 
@@ -89,6 +104,7 @@ export const useAuthStore = defineStore('auth', () => {
     displayName,
     login,
     logout,
+    restore,
     clear,
     hasRole,
   }

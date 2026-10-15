@@ -11,4 +11,6 @@
   - dimensions  五维研究框架（T-05）
   - content     跨信源统一内容模型（T-05）
   - evidence    统一证据模型（T-05）
+  - section     章节草稿（两个分析角色共用，T-14）
+  - permissions 权限矩阵：角色 × 功能 × 数据范围（T-19）
 """

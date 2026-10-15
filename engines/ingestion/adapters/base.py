@@ -80,6 +80,15 @@ class SourceAdapter(ABC):
     # 只有微博与抖音两表恰好同名——这是个"看起来能跑、换一类信源就炸"的陷阱。
     comment_published_field: ClassVar[str] = "create_time"
 
+    # 关键词检索涉及的原始列（各适配器声明）。放在适配器而不是查询层，
+    # 因为「哪一列是正文」正是本层唯一知道的事——上层再维护一份列名映射，
+    # 迟早出现「检索漏了一个平台的字段」而没人发现。
+    search_fields: ClassVar[tuple[str, ...]] = ()
+    # 评论表的检索列。**必须与上面分开**：评论表只有 `content` 一列正文，
+    # 而内容表在短视频/新闻/论坛里还有 `title`/`desc`——把它们套到评论表上
+    # 会直接报「Unknown column」（实测：带关键词的列表接口 503）。
+    comment_search_fields: ClassVar[tuple[str, ...]] = ("content",)
+
     # ------------------------------------------------------------------
     # 模板方法：对外入口
     # ------------------------------------------------------------------
@@ -127,7 +136,7 @@ class SourceAdapter(ABC):
             record_type=RECORD_COMMENT,
             parent_content_uid=make_content_uid(
                 self.source_type, self.content_table, parent_business_id),
-            author=self._merge_account(self._author_of(row), account),
+            author=self._merge_account(self._comment_author_of(row), account),
             text=to_str(row.get("content")),
             raw_text=to_str(row.get("content")),
             published_at=to_int(row.get(self.comment_published_field)),
@@ -164,6 +173,21 @@ class SourceAdapter(ABC):
 
     def _author_of(self, row: Mapping[str, Any]) -> Author:
         """从行内提取作者基本信息。默认取 user_id / nickname / ip_location 三件套。"""
+        return self._person_author(row)
+
+    def _comment_author_of(self, row: Mapping[str, Any]) -> Author:
+        """评论作者的提取规则。
+
+        **默认与内容主体相同**（调用 `_author_of`，因此子类对内容作者的覆写同样生效），
+        只有新闻门户需要覆写：它的内容作者是媒体机构（`media_name`），
+        而评论作者是**读者**（`nickname`）。不区分的结果是评论区所有人被当成媒体、
+        昵称还全空（实测：代表言论显示成「（空昵称）」，新闻评论还被误判成媒体跟进节点）。
+        """
+        return self._author_of(row)
+
+    @staticmethod
+    def _person_author(row: Mapping[str, Any]) -> Author:
+        """个人账号三件套（`user_id` / `nickname` / `ip_location`）。"""
         return Author(
             account_id=to_str(row.get("user_id")),
             nickname=to_str(row.get("nickname")),
@@ -180,13 +204,17 @@ class SourceAdapter(ABC):
         return ()
 
     def account_lookup_key(self, row: Mapping[str, Any]) -> str:
-        """用于在 platform_account 表中查该行作者的键。
+        """用于在 platform_account 表中查该行作者的键（**内容行**）。
 
         默认是 user_id 三件套中的 ID 字段，但**新闻门户是例外**：
         它的原始表只存了媒体名与记者名，没有账号 ID，只能按媒体名匹配。
         调用方统一用本方法取键，不必为每个平台写分支。
         """
         return to_str(row.get("user_id"))
+
+    def comment_account_lookup_key(self, row: Mapping[str, Any]) -> str:
+        """**评论行**的账号查键。与内容行的差异同 `_comment_author_of`。"""
+        return self.account_lookup_key(row)
 
     @staticmethod
     def _merge_account(author: Author,

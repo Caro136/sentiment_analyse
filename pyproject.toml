@@ -33,7 +33,11 @@ keywords = ["jieba>=0.42"]
 embeddings = ["sentence-transformers>=3.0"]
 vector = ["pymilvus>=2.4"]
 multimodal = ["mcp>=1.0"]
-auth = ["passlib[bcrypt]>=1.7", "itsdangerous>=2.2"]
+# T-19 认证。口令哈希用标准库 hashlib.scrypt（设计规格 8.1 的备选方案）：
+# 实测 passlib 1.7.4 读不到 bcrypt 5.x 的版本号，且 bcrypt 5.0 对 >72 字节的口令
+# 直接抛 ValueError，连普通口令都哈希不了；scrypt 无长度上限也没有第三方依赖。
+# 因此这里只需要会话票据的签名库。
+auth = ["itsdangerous>=2.2"]
 report = ["mistune>=3.0"]
 
 [tool.uv]

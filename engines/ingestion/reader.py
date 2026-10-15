@@ -22,9 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from engines.common.db.session import session_scope
 from engines.common.logging import logger
-from engines.contracts.content import UnifiedContent
+from engines.contracts.content import UnifiedContent, make_content_uid, parse_content_uid
 from engines.contracts.enums import SourceType
 from engines.ingestion.adapters import all_adapters, get_adapter
+from engines.ingestion.adapters.base import to_int
 
 ACCOUNT_TABLE = "platform_account"
 ACCOUNT_BATCH_SIZE = 500      # IN 子句的参数上限保护
@@ -173,9 +174,11 @@ async def fetch_with_session(query: FetchQuery,
             for row in await _fetch_rows(session, sql, params):
                 raw_comments.append((adapter, row))
 
-    # 批量取账号：把内容与评论的查找键合并成一次查询
-    lookup_keys = [adapter.account_lookup_key(row)
-                   for adapter, row in (*raw_contents, *raw_comments)]
+    # 批量取账号：把内容与评论的查找键合并成一次查询。
+    # 评论用 comment_account_lookup_key —— 新闻内容按媒体名匹配，评论按读者的 user_id
+    lookup_keys = ([adapter.account_lookup_key(row) for adapter, row in raw_contents]
+                   + [adapter.comment_account_lookup_key(row)
+                      for adapter, row in raw_comments])
     accounts = await load_accounts(session, lookup_keys)
 
     result = FetchResult(content_rows=len(raw_contents),
@@ -189,7 +192,7 @@ async def fetch_with_session(query: FetchQuery,
             result.per_source.get(adapter.content_table, 0) + 1
 
     for adapter, row in raw_comments:
-        key = adapter.account_lookup_key(row)
+        key = adapter.comment_account_lookup_key(row)
         content = adapter.to_comment(row, account=accounts.get(key))
         result.contents.append(content)
         result.per_source[adapter.comment_table] = \
@@ -213,3 +216,246 @@ async def fetch_contents(query: FetchQuery) -> FetchResult:
         "接入完成 {} | 内容 {} 条 / 评论 {} 条 | 分布 {}",
         query.label, result.content_rows, result.comment_rows, result.per_source)
     return result
+
+
+@dataclass(frozen=True)
+class SourceProbe:
+    """单个信源的探测结果（FR-13 通道连通性自检）。"""
+
+    source_type: SourceType
+    content_table: str
+    comment_table: str
+    content_rows: int
+    comment_rows: int
+    latest_published_at: int | None
+
+    @property
+    def has_data(self) -> bool:
+        return self.content_rows > 0
+
+
+@dataclass(frozen=True)
+class RawHit:
+    """原始表里的一条候选内容（只带排序与过滤需要的最小信息）。"""
+
+    content_uid: str
+    source_type: SourceType
+    source_table: str
+    business_id: int
+    published_at: int
+
+
+MATCH_TEXT = "text"
+MATCH_TOPIC = "topic"
+
+
+async def search_raw_hits(*, session: AsyncSession, keyword: str | None = None,
+                          match: str = MATCH_TEXT,
+                          start_time: int | None = None, end_time: int | None = None,
+                          source_types: Sequence[SourceType] = (),
+                          include_comments: bool = True) -> list[RawHit]:
+    """按「原始侧条件」筛出候选内容，**按发布时间倒序**返回。
+
+    为什么这些条件必须落到原始表：发布时间与正文只存在于原始表
+    （分析区只存标签），而「时间跨度筛选」「关键词检索」正是用户在工作台最常用的两个动作。
+
+    典型用法是先拿它限定候选集，再在分析表上叠筛选条件（ADR-03 的两段查询）：
+    原始侧决定**有哪些内容**，分析侧决定**哪些打了什么标**。
+
+    `match` 决定关键词匹配的是**哪个字段**，两者语义完全不同，不能混用：
+
+    | 取值 | 匹配字段 | 用途 |
+    |------|---------|------|
+    | `text`（默认） | 正文列（微博 content、抖音 desc…） | 工作台的「正文关键词」检索 |
+    | `topic` | `source_keyword` 列，**双向模糊** | 判定内容归属哪个监测主题（FR-08） |
+
+    写错这一个参数的表现是「筛选结果少得离谱」而不报错——例如用正文检索去找
+    主题归属，会把「正文里恰好提到该词」的内容算成命中，而真正属于该主题的内容漏掉。
+
+    规模提示：本函数不做分页，返回的是完整候选集（演示规模千级）。若数据量继续增长，
+    应把 `published_at` 冗余进 `content_analysis`（需要改 DDL），恢复纯 SQL 分页。
+    """
+    if match not in (MATCH_TEXT, MATCH_TOPIC):
+        raise ValueError(f"未知的匹配方式：{match!r}")
+
+    adapters = (all_adapters() if not source_types
+                else tuple(get_adapter(t) for t in source_types))
+
+    hits: list[RawHit] = []
+    for adapter in adapters:
+        # --- 内容表 ---
+        conditions: list[str] = []
+        params: dict[str, Any] = {}
+        if keyword:
+            if match == MATCH_TOPIC:
+                # 与 reader 的主题归属判定同一套条件（双向模糊）
+                conditions.append(_keyword_condition())
+            else:
+                like_terms = [f"`{field}` LIKE :kw" for field in adapter.search_fields]
+                if like_terms:
+                    conditions.append("(" + " OR ".join(like_terms) + ")")
+            params["keyword"] = keyword
+            if match == MATCH_TEXT:
+                params["kw"] = f"%{keyword}%"
+        if start_time is not None:
+            conditions.append(f"`{adapter.published_field}` >= :start_time")
+            params["start_time"] = start_time
+        if end_time is not None:
+            conditions.append(f"`{adapter.published_field}` <= :end_time")
+            params["end_time"] = end_time
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = (f"SELECT `{adapter.content_business_field}` AS bid, "
+               f"`{adapter.published_field}` AS published "
+               f"FROM `{adapter.content_table}` {where}")
+        rows = await _fetch_rows(session, sql, params)
+
+        parent_ids: list[int] = []
+        for row in rows:
+            business_id = to_int(row.get("bid"))
+            if not business_id:
+                continue
+            parent_ids.append(business_id)
+            hits.append(RawHit(
+                content_uid=make_content_uid(adapter.source_type, adapter.content_table,
+                                             business_id),
+                source_type=adapter.source_type,
+                source_table=adapter.content_table,
+                business_id=business_id,
+                published_at=to_int(row.get("published")),
+            ))
+
+        # --- 评论表 ---
+        if not include_comments:
+            continue
+        comment_conditions: list[str] = []
+        comment_params: dict[str, Any] = {}
+        if keyword and match == MATCH_TEXT:
+            like_terms = [f"`{field}` LIKE :kw"
+                          for field in adapter.comment_search_fields]
+            if like_terms:
+                comment_conditions.append("(" + " OR ".join(like_terms) + ")")
+                comment_params["kw"] = f"%{keyword}%"
+        elif match == MATCH_TOPIC:
+            # 评论表没有 source_keyword：归属由父内容决定，只取父内容命中的那些评论
+            if not parent_ids:
+                continue
+            placeholders = ", ".join(f":p{i}" for i in range(len(parent_ids)))
+            comment_conditions.append(f"`{adapter.parent_field}` IN ({placeholders})")
+            comment_params.update({f"p{i}": v for i, v in enumerate(parent_ids)})
+        if start_time is not None:
+            comment_conditions.append(
+                f"`{adapter.comment_published_field}` >= :start_time")
+            comment_params["start_time"] = start_time
+        if end_time is not None:
+            comment_conditions.append(
+                f"`{adapter.comment_published_field}` <= :end_time")
+            comment_params["end_time"] = end_time
+
+        comment_where = (f"WHERE {' AND '.join(comment_conditions)}"
+                         if comment_conditions else "")
+        comment_sql = (f"SELECT `{adapter.comment_business_field}` AS bid, "
+                       f"`{adapter.comment_published_field}` AS published "
+                       f"FROM `{adapter.comment_table}` {comment_where}")
+        for row in await _fetch_rows(session, comment_sql, comment_params):
+            business_id = to_int(row.get("bid"))
+            if not business_id:
+                continue
+            hits.append(RawHit(
+                content_uid=make_content_uid(adapter.source_type, adapter.comment_table,
+                                             business_id),
+                source_type=adapter.source_type,
+                source_table=adapter.comment_table,
+                business_id=business_id,
+                published_at=to_int(row.get("published")),
+            ))
+
+    # 跨表合并后统一按发布时间倒序：四张表各查一次，顺序只能在应用层合并
+    hits.sort(key=lambda hit: hit.published_at, reverse=True)
+    return hits
+
+
+async def load_contents(uids: Sequence[str],
+                        session: AsyncSession) -> dict[str, UnifiedContent]:
+    """按统一标识批量取回内容（含账号权重），供详情与列表回填原文。
+
+    一次请求的列表页可能有几十条内容、分属四类信源，因此按表分组后各发一条
+    `IN` 查询，账号也是一次批量取（N+1 会让列表接口直接退化）。
+    识别不了的标识**直接跳过**——分析表里可能残留原始表已清理的记录，
+    这种情况应当少一条内容，而不是整个列表报错。
+    """
+    if not uids:
+        return {}
+
+    buckets: dict[tuple[str, str], list[int]] = {}
+    for uid in uids:
+        try:
+            source_type, table, business_id = parse_content_uid(uid)
+        except ValueError:
+            logger.warning("跳过无法解析的 content_uid：{}", uid)
+            continue
+        buckets.setdefault((source_type, table), []).append(business_id)
+
+    contents: dict[str, UnifiedContent] = {}
+    for (source_type_value, table), business_ids in buckets.items():
+        try:
+            adapter = get_adapter(SourceType(source_type_value))
+        except (KeyError, ValueError):
+            logger.warning("跳过未知信源的 content_uid：{}:{}", source_type_value, table)
+            continue
+
+        is_comment = table == adapter.comment_table
+        business_field = (adapter.comment_business_field if is_comment
+                          else adapter.content_business_field)
+
+        rows: list[dict[str, Any]] = []
+        for start in range(0, len(business_ids), ACCOUNT_BATCH_SIZE):
+            batch = business_ids[start:start + ACCOUNT_BATCH_SIZE]
+            placeholders = ", ".join(f":b{i}" for i in range(len(batch)))
+            params = {f"b{i}": v for i, v in enumerate(batch)}
+            sql = (f"SELECT * FROM `{table}` WHERE `{business_field}` IN ({placeholders})")
+            rows.extend(await _fetch_rows(session, sql, params))
+
+        # 评论与内容的账号查键不同（新闻内容按媒体名、评论按读者 user_id）
+        lookup = (adapter.comment_account_lookup_key if is_comment
+                  else adapter.account_lookup_key)
+        accounts = await load_accounts(session, [lookup(row) for row in rows])
+
+        for row in rows:
+            account = accounts.get(lookup(row))
+            content = (adapter.to_comment(row, account=account) if is_comment
+                       else adapter.to_content(row, account=account))
+            contents[content.content_uid] = content
+
+    return contents
+
+
+async def probe_source(source_type: SourceType,
+                       session: AsyncSession) -> SourceProbe:
+    """统计某信源原始表的条数与最新发布时间（FR-13）。
+
+    只发 SELECT（ADR-03：原始表只读）。用途是通道自检——**能连上库、表里有数据、
+    数据的时间戳是新的**，这三件事合起来才是「通道可用」的可用信号；
+    本项目没有真实采集器，因此不去探测外部站点（那会给出一个假的「通道正常」）。
+    """
+    adapter = get_adapter(source_type)
+    sql = (f"SELECT COUNT(*) AS n, MAX(`{adapter.published_field}`) AS latest "
+           f"FROM `{adapter.content_table}`")
+    row = (await session.execute(text(sql), {})).mappings().first()
+    content_rows = int((row or {}).get("n") or 0)
+    latest = (row or {}).get("latest")
+    latest_published_at = int(latest) if latest is not None else None
+
+    comment_row = (await session.execute(
+        text(f"SELECT COUNT(*) AS n FROM `{adapter.comment_table}`"), {})
+    ).mappings().first()
+    comment_rows = int((comment_row or {}).get("n") or 0)
+
+    return SourceProbe(
+        source_type=source_type,
+        content_table=adapter.content_table,
+        comment_table=adapter.comment_table,
+        content_rows=content_rows,
+        comment_rows=comment_rows,
+        latest_published_at=latest_published_at,
+    )

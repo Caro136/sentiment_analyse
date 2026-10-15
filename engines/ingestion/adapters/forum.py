@@ -29,6 +29,8 @@ class ForumAdapter(SourceAdapter):
     parent_field: ClassVar[str] = "thread_id"
     comment_business_field: ClassVar[str] = "post_id"
 
+    search_fields = ("title", "content")
+
     def _text_of(self, row: Mapping[str, Any]) -> tuple[str, str]:
         return to_str(row.get("title")), to_str(row.get("content"))
 

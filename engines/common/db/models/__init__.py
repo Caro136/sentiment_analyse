@@ -19,6 +19,7 @@ from engines.common.db.models.business import (
     AlertRecord,
     AlertRule,
     AuditLog,
+    DashboardMetric,
     Report,
     ReportFile,
     SourceChannel,
@@ -38,4 +39,5 @@ __all__ = [
     # 业务区
     "SysUser", "AuditLog", "Topic", "TopicKeyword", "SourceChannel", "TopicChannel",
     "AlertRule", "AlertRecord", "Ticket", "TicketLog", "Report", "ReportFile", "TaskRun",
+    "DashboardMetric",
 ]

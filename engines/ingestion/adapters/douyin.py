@@ -25,6 +25,8 @@ class DouyinAdapter(SourceAdapter):
     parent_field: ClassVar[str] = "aweme_id"
     comment_business_field: ClassVar[str] = "comment_id"
 
+    search_fields = ("title", "desc")
+
     def _text_of(self, row: Mapping[str, Any]) -> tuple[str, str]:
         return to_str(row.get("title")), to_str(row.get("desc"))
 

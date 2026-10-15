@@ -8,11 +8,13 @@
 调用方一律使用本模块的函数，不直接构造事件对象再 publish。
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 from engines.common.eventing.bus import get_event_bus
 from engines.common.logging import mask_secret
 from engines.contracts.events import (
+    ContentLabeledEvent,
     HostDiscussionMessageEvent,
     RoleErrorEvent,
     RoleProgressEvent,
@@ -36,6 +38,24 @@ def publish_role_result(role: str, result_path: str | None = None) -> None:
 def publish_role_error(role: str, error: str) -> None:
     """上报角色执行失败。错误文本统一脱敏后再入事件——它会被推送到前端并落日志。"""
     get_event_bus().publish(RoleErrorEvent(role=role, error=mask_secret(error)[:500]))
+
+
+def publish_content_labeled(content_uids: Sequence[str], *,
+                            topic_ids: Sequence[str] = (),
+                            negative_count: int = 0) -> None:
+    """通告「一批内容已打标完成」（预警引擎的触发源）。
+
+    由 analytics 在批量打标结束后调用。**回调必须是同步且 O(1) 的**
+    （见 bus 模块说明）：订阅方只入队，规则匹配交给自己的工作协程，
+    否则这里会阻塞打标流程。
+    """
+    if not content_uids:
+        return
+    get_event_bus().publish(ContentLabeledEvent(
+        content_uids=tuple(content_uids),
+        topic_ids=tuple(dict.fromkeys(topic_ids)),
+        negative_count=negative_count,
+    ))
 
 
 def publish_section_ready(source: str, section_key: str, query: str, body: str,
