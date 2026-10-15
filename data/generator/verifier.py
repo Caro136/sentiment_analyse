@@ -89,6 +89,69 @@ def check_foreign_keys(data, result):
                "\n".join(problems) if problems else "全部评论均可追溯到宿主内容")
 
 
+def check_id_uniqueness(data, result):
+    """业务 ID 必须唯一。
+
+    这条检查是补上的：曾经 ID 生成器用"随机间隔"递增，`1×2` 与 `2×1` 撞出同一个值，
+    导致评论按业务 ID 关联到错误的内容上——评论时间比父内容还早两天，
+    而整个链路不报任何错。唯一性一旦破坏，所有基于关联的分析都失去意义。
+    """
+    id_fields = {
+        "weibo_note": "note_id",
+        "douyin_aweme": "aweme_id",
+        "news_article": "id",
+        "forum_thread": "thread_id",
+        "weibo_note_comment": "comment_id",
+        "douyin_aweme_comment": "comment_id",
+        "news_article_comment": "comment_id",
+        "forum_post": "post_id",
+        "platform_account": "account_id",
+    }
+    problems = []
+    for table, field in id_fields.items():
+        rows = data.accounts if table == "platform_account" else data.rows[table]
+        ids = [row.get(field) for row in rows]
+        duplicates = len(ids) - len(set(ids))
+        if duplicates:
+            problems.append(f"{table}.{field}：{duplicates} 个重复（共 {len(ids)} 条）")
+    result.add("业务 ID 唯一性", not problems,
+               "\n".join(problems) if problems else "9 张表的业务 ID 均无重复")
+
+
+def check_comment_parent_consistency(data, result):
+    """评论的时间必须不早于其父内容（容差 1 分钟）。
+
+    这是 ID 唯一性被破坏后最容易观察到的症状——评论挂错内容，时间就对不上。
+    单靠唯一性检查不够：将来若出现其他形式的关联错位，这条能兜住。
+    """
+    pairs = [
+        ("weibo_note_comment", "note_id", "weibo_note", "note_id"),
+        ("douyin_aweme_comment", "aweme_id", "douyin_aweme", "aweme_id"),
+        ("news_article_comment", "article_id", "news_article", "id"),
+        ("forum_post", "thread_id", "forum_thread", "thread_id"),
+    ]
+    time_fields = {
+        "weibo_note": "create_time", "douyin_aweme": "create_time",
+        "news_article": "publish_time", "forum_thread": "publish_time",
+    }
+    tolerance = 60
+    problems = []
+
+    for comment_table, parent_field, content_table, content_key in pairs:
+        parent_time = {row[content_key]: row[time_fields[content_table]]
+                       for row in data.rows[content_table]}
+        bad = 0
+        for row in data.rows[comment_table]:
+            parent_ts = parent_time.get(row.get(parent_field))
+            if parent_ts is not None and row["create_time"] < parent_ts - tolerance:
+                bad += 1
+        if bad:
+            problems.append(f"{comment_table}：{bad} 条评论早于其父内容（关联可能错位）")
+
+    result.add("评论与父内容的时间一致性", not problems,
+               "\n".join(problems) if problems else "全部评论均不早于其父内容")
+
+
 def check_time_range(data, result):
     """全部时间落在 [结束时间 - 72h, 结束时间] 内。"""
     end_ts = int(data.stats_end_time.timestamp())
@@ -375,6 +438,8 @@ def verify(data, sql_dir, eval_dir):
     result = CheckResult()
     check_sources(data, result)
     check_foreign_keys(data, result)
+    check_id_uniqueness(data, result)
+    check_comment_parent_consistency(data, result)
     check_time_range(data, result)
     check_sentiment(data, result)
     check_alert_trigger(data, result)

@@ -24,6 +24,30 @@ def _tcp_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+async def _check_mysql(settings) -> dict:
+    """探测 MySQL。
+
+    优先用真实连接（能发现「端口通但库不存在」「认证失败」这类 TCP 探测看不出的问题），
+    连接层不可用时回退到 TCP 探测，保证该接口在任何阶段都能给出有用信息。
+    """
+    target = f"{settings.db_host}:{settings.db_port}"
+    try:
+        from engines.common.db.session import ping
+
+        ok, detail = await ping()
+        return {"name": "MySQL", "target": target, "reachable": ok, "detail": detail}
+    except Exception as exc:  # noqa: BLE001
+        from engines.common.logging import mask_secret
+
+        reachable = _tcp_reachable(settings.db_host, settings.db_port)
+        return {
+            "name": "MySQL",
+            "target": target,
+            "reachable": reachable,
+            "detail": mask_secret(f"{type(exc).__name__}: {exc}")[:160],
+        }
+
+
 @router.get("/healthz", summary="存活探测")
 async def healthz() -> dict:
     return {"status": "ok", "service": "sentiment-analyse"}
@@ -33,13 +57,7 @@ async def healthz() -> dict:
 async def readyz() -> dict:
     settings = get_settings()
 
-    dependencies = [
-        {
-            "name": "MySQL",
-            "target": f"{settings.db_host}:{settings.db_port}",
-            "reachable": _tcp_reachable(settings.db_host, settings.db_port),
-        },
-    ]
+    dependencies = [await _check_mysql(settings)]
 
     if settings.insight_vector_enabled:
         milvus_host, milvus_port = _split_host_port(settings.milvus_uri, default_port=19530)

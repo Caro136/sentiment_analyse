@@ -14,15 +14,20 @@ dependencies = [
     "python-dotenv>=1.0",
     "loguru>=0.7",
     "sse-starlette>=2.1",
-    "SQLAlchemy>=2.0",
+    "sqlalchemy[asyncio]>=2.0",   # asyncio extra 会带入 greenlet，异步 session 必需
     "aiomysql>=0.2",
 ]
 
 # 按任务分工的依赖组：避免一次性拉取完整重依赖（如 torch）
 # 安装示例： uv sync --extra agents --extra analytics
 [project.optional-dependencies]
+# T-04 模型客户端（OpenAI 兼容协议）。agents 组会连带安装它。
+llm = ["langchain-openai>=0.2"]
 agents = ["langgraph>=0.2", "langchain>=0.3", "langchain-openai>=0.2"]
-analytics = ["jieba>=0.42", "numpy>=1.26", "scikit-learn>=1.5"]
+analytics = ["numpy>=1.26", "scikit-learn>=1.5"]
+# 关键词提取（词云）。单独成组：jieba 只有源码包，
+# 清华镜像对其返回 403，装它需要临时换源（见 README）。
+keywords = ["jieba>=0.42"]
 embeddings = ["sentence-transformers>=3.0"]
 vector = ["pymilvus>=2.4"]
 multimodal = ["mcp>=1.0"]
@@ -32,8 +37,10 @@ report = ["mistune>=3.0"]
 [tool.uv]
 package = false
 
-# 国内镜像优先：避免依赖下载受网络影响
+# 国内镜像优先：避免依赖下载受网络影响。
+# 用阿里云而非清华：清华镜像对部分源码包（如 jieba）返回 403 Forbidden，
+# 且解析锁文件时会因某个 extra 的依赖失败而整体失败。
 [[tool.uv.index]]
-name = "tsinghua"
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+name = "aliyun"
+url = "https://mirrors.aliyun.com/pypi/simple/"
 default = true

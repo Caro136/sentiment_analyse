@@ -54,9 +54,48 @@ SCALE_PROFILES = {
 # 官方回应类内容的评论情绪分布另设：以观望与认可为主
 OFFICIAL_COMMENT_MIX = {"neutral": 0.62, "positive": 0.26, "negative": 0.12}
 
-# 内容装饰素材：增加文本多样性，避免模板重复过于明显
-CONTENT_PREFIXES = ["", "", "", "", "分享一下：", "说说我的看法：", "记录一下：", "转需："]
-CONTENT_SUFFIXES = ["", "", "", " 大家怎么看？", " 有同样情况的吗？", " 求个说法。"]
+# ---------------------------------------------------------------------------
+# 文本装饰素材
+#
+# 为什么需要它：模板库只有几十条文案，却要生成上千条评论。不做组合，
+# 会出现大量**逐字相同**的内容——SimHash 会正确地把它们全部合并，
+# 结果是「接入 2500 条、去重后只剩 270 条」，声量与情感分布彻底失真。
+#
+# 装饰的意义不是"加噪声"，而是逼近真实语料的表达多样性：
+# 同一件事，有人直说、有人先铺垫语气、有人末尾补一句态度。
+# 空串占比较高，是为了让大部分评论保持朴素表达，不至于每条都带口头禅。
+# ---------------------------------------------------------------------------
+
+CONTENT_PREFIXES = [
+    "", "", "", "", "",
+    "分享一下：", "说说我的看法：", "记录一下：", "转需：", "个人经历：",
+    "说个情况：", "反馈一下：", "不吐不快：", "客观说：",
+]
+
+CONTENT_SUFFIXES = [
+    "", "", "", "", "",
+    " 大家怎么看？", " 有同样情况的吗？", " 坐等后续。",
+    " 有没有懂的说一下", " 已反馈给客服",
+]
+
+COMMENT_PREFIXES = [
+    "", "", "", "", "",
+    "说实话，", "讲真，", "我就想说，", "客观讲，", "纯路人，",
+    "不是，", "怎么讲呢，", "反正我，",
+]
+
+# ⚠️ 装饰词必须是**语义中性**的：只做语气铺垫，不表达情感倾向。
+#
+# 这里踩过坑：曾经把「无语」「服了」「唉」「真的会谢」放进后缀池，
+# 于是「同价位还有什么可以选的」被装饰成「同价位还有什么可以选的 无语」——
+# 文本实际已变成负向，但生成评测集时仍按原始模板标成中性，
+# 造成**标注与文本不符**，直接拉低评测准确率（简单样本反而比困难样本低 18 个点）。
+# 去掉带倾向的词之后，装饰只增加表达多样性，不改变语义。
+COMMENT_SUFFIXES = [
+    "", "", "", "", "",
+    " 顶", " +1", " 同感", " 你们怎么看", " 转发扩散",
+    " 蹲一个后续", " 已反馈", " 求扩散",
+]
 
 SCENARIO_TOPIC_TAGS = {
     "consumer_electronics": ["#星耀XPhone15#", "#数码#", "#手机发热#", "#新机体验#"],
@@ -94,16 +133,25 @@ class GeneratedData:
 
 
 class _IdGen:
-    """业务 ID 生成器：带随机起点的递增计数，避免与任何现有数据碰撞。"""
+    """业务 ID 生成器：带随机起点的**严格递增**序列。
 
-    def __init__(self, rng, start, width=16):
+    必须严格递增，不能靠"随机间隔"制造自然感。早期实现写成
+    `base + offset * randint(1, 7)`，看似合理，实际上 `1×2` 与 `2×1` 会算出同一个值——
+    ID 重复后，评论会按业务 ID 关联到**错误的内容**上，
+    而且整个链路不会报任何错，只是统计结果悄悄失真。
+    """
+
+    def __init__(self, rng, start, width=16, step=7):
         self._rng = rng
         self._base = rng.randint(10 ** (width - 1), 10 ** width - 10 ** (width - 1))
         self._offset = 0
+        self._step = step
 
-    def next(self):
+    def next(self) -> int:
+        # 每个 offset 占据长度为 step 的互不重叠区间，区间内仍保留随机性
         self._offset += 1
-        return self._base + self._offset * self._rng.randint(1, 7) + self._rng.randint(0, 9)
+        return (self._base + self._offset * self._step
+                + self._rng.randint(0, self._step - 1))
 
 
 class Builder:
@@ -244,9 +292,15 @@ class Builder:
         return out
 
     def _decorate_comment(self, text, scenario_key):
-        if self.rng.random() < 0.25:
-            return text + self.rng.choice(["", " 顶", " +1", " 同感", " 转发扩散", "！"])
-        return text
+        """给评论文本加前缀/后缀，制造表达层面的多样性。
+
+        前缀与后缀各自独立随机，组合数约 13 × 18 = 234 种。
+        没有这一步，同一情绪类别下只有几条模板文案被反复抽取，
+        去重会把它们全部合并掉。
+        """
+        prefix = self.rng.choice(COMMENT_PREFIXES)
+        suffix = self.rng.choice(COMMENT_SUFFIXES)
+        return f"{prefix}{text}{suffix}"
 
     def _pick_sentiment(self, mix):
         keys = list(mix.keys())
@@ -289,20 +343,38 @@ class Builder:
             scenario_total = max(10, round(total * scenario.total_weight / grand_weight))
             for batch in scenario.batches:
                 count = max(1, round(scenario_total * batch.weight / scenario.total_weight))
+                # repeat 专供水军批次：它们的内容量靠「同一批账号反复发」堆出来，
+                # 而不是靠权重——权重调大会挤占正常内容的配额
+                count *= max(1, batch.repeat)
                 self._emit_batch(scenario, batch, count)
 
         self._finalize_stats()
         return self.data
 
+    def _bot_accounts(self, source) -> list[str]:
+        """取该信源可用的水军账号。"""
+        bots = [a.key for a in ACCOUNTS if a.is_bot and a.platform == source]
+        return bots or [a.key for a in ACCOUNTS if a.is_bot]
+
     def _emit_batch(self, scenario, batch, count):
         is_bot_batch = "bot_pool" in batch.authors
-        for _ in range(count):
-            author_id = self._pick_author(batch.source, batch.authors)
+        # 水军账号**轮转分配**而非随机抽取：真实刷量是同一批账号集中发，
+        # 随机分配会让每个账号只摊到一两条，达不到「短时间窗内多条雷同」的特征，
+        # 水军识别自然也就无从触发
+        bot_accounts = self._bot_accounts(batch.source) if is_bot_batch else []
+
+        for index in range(count):
+            if is_bot_batch and bot_accounts:
+                author_id = bot_accounts[index % len(bot_accounts)]
+            else:
+                author_id = self._pick_author(batch.source, batch.authors)
             sentiment = self._pick_sentiment(batch.sentiment_mix)
 
             if is_bot_batch:
                 text = self._bot_text(scenario.key)
-                template_group = {"emotion": scenarios.EMOTION_ANGER, "title": ""}
+                # 刷量内容一律负向 —— 水军的作用就是把负面声音刷上去
+                template_group = {"sentiment": SENTIMENT_NEGATIVE,
+                                  "emotion": scenarios.EMOTION_ANGER, "title": ""}
             else:
                 template_group = self._pick_text_template(scenario.key, batch.role, sentiment)
                 raw = self.rng.choice(template_group["texts"])
@@ -316,7 +388,11 @@ class Builder:
             content_meta = {
                 "scenario": scenario.key,
                 "role": batch.role,
-                "sentiment": sentiment,
+                # 情感标签**以模板实际情感为准**，而不是抽样值。
+                # 当某个角色下没有该情感的模板时，_pick_text_template 会退回全部模板——
+                # 此时若仍用抽样值当标签，就会出现「文本是负向、标签是中性」的错标，
+                # 评测时把模型的正确判断当成错误。
+                "sentiment": template_group["sentiment"],
                 "emotion": template_group.get("emotion", ""),
                 "source_type": batch.source,
                 "author_id": author_id,
@@ -329,7 +405,11 @@ class Builder:
             content_meta["biz_id"] = biz_id
             self.data.content_index[biz_id] = content_meta
 
-            self.data.add_sample(text, sentiment, template_group.get("emotion", ""),
+            # 标签必须与**实际写入的文本**一致：这里同样用 template_group 的情感，
+            # 而不是 batch.sentiment_mix 的抽样值。两处（落库与样本采样）
+            # 必须同源，否则评测集会出现「文本是负向、gold 是中性」的错标。
+            self.data.add_sample(text, template_group["sentiment"],
+                                 template_group.get("emotion", ""),
                                  batch.source, scenario.key, batch.role)
 
             if not is_bot_batch:

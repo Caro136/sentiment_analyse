@@ -16,7 +16,18 @@
 |------|------|------|
 | 数据准备 | 4 类信源模拟数据集 + 情感/风险评测集 | ✅ 已完成 |
 | T-01 | 工程骨架：目录、配置、日志、启动器 | ✅ 已完成 |
-| T-02 ~ T-36 | 数据层、分析链路、研判链路、业务能力、前端 | ⏳ 待开展 |
+| T-02 | 数据库层：31 张表 DDL、ORM 模型、异步会话 | ✅ 已完成 |
+| T-03 | 事件总线：五类事件契约、发布订阅、进度回调 | ✅ 已完成 |
+| T-04 | 模型客户端：按角色配置、结构化输出、重试器 | ✅ 已完成 |
+| T-05 | 契约层：五维框架、统一内容与证据模型 | ✅ 已完成 |
+| T-06 | 前端骨架：Vue3 + Vite + TS、路由守卫、状态管理、接口封装 | ✅ 已完成 |
+| T-07 | 平台适配器：4 类信源字段映射收敛 | ✅ 已完成 |
+| T-08 | 接入与清洗：多源读取、文本清洗、SimHash 去重、水军识别 | ✅ 已完成 |
+| T-09 | 多模态解析：OCR（MCP 云服务）、ASR 模拟、失败放行 | ✅ 已完成 |
+| T-10 | 认知分析：情感识别、烈度指数、风险分级（评测 87.6%） | ✅ 已完成 |
+| T-11 | 认知分析：实体抽取、观点聚类、事件归并 | ✅ 已完成 |
+| T-12 | 向量召回：Milvus 索引、语义检索、RRF 融合 | ✅ 已完成 |
+| T-13 ~ T-36 | 研判链路、业务能力、前端页面 | ⏳ 待开展 |
 
 ## 环境准备
 
@@ -27,6 +38,10 @@
 uv sync
 
 # 2. 按任务追加依赖组
+# ⚠️ 一次性列全需要的 extra：uv sync --extra X 会把环境同步为「基础 + X」，
+#    不带上的 extra 会被移除（例如只写 --extra multimodal 会卸掉 T-04 的 langchain）
+uv sync --extra llm --extra multimodal    # T-04 模型客户端 + T-09 OCR
+uv sync --extra llm             # T-04 模型客户端（langchain-openai）
 uv sync --extra agents          # T-13~T-16 研判链路（langgraph / langchain）
 uv sync --extra analytics       # T-10~T-11 认知分析（jieba / scikit-learn）
 uv sync --extra embeddings      # T-12 向量编码（sentence-transformers）
@@ -41,6 +56,36 @@ cp .env.example .env            # 按实际环境填写密钥
 
 **未填密钥不影响启动**：服务会照常运行并在日志中列出未就绪的能力，
 相关接口调用时才降级或报错。这样开发期不必等所有密钥到位才能开工。
+
+## 数据库初始化
+
+```bash
+# 建库建表（原始区 9 张 + 分析区 9 张 + 业务区 13 张 = 31 张）
+python -m engines.common.db.init_db
+
+# 首次初始化时一并导入模拟数据集（内容 505 / 评论 6093 / 账号 385）
+python -m engines.common.db.init_db --with-data
+
+# 查看各表行数
+python -m engines.common.db.init_db --status
+
+# DDL 与 ORM 一致性校验（改表结构后必跑）
+python -m engines.common.db.check
+```
+
+> ⚠️ 建表脚本含 `DROP TABLE IF EXISTS`。目标库已存在时 `init_db` 会主动中止，
+> 需显式加 `--force` 才会重建（会清空同名表）。
+
+### 表的三个分区（设计规格 ADR-03）
+
+| 分区 | 表 | 写入方 |
+|------|-----|--------|
+| **原始区**（9 张） | `weibo_*`、`douyin_*`、`news_*`、`forum_*`、`platform_account` | 数据生成器 · **本项目只读** |
+| **分析区**（9 张） | `content_analysis`、`modality_asset`、`event`、`event_content`、`opinion_cluster`、`cluster_member`、`spread_node`、`entity`、`entity_relation` | ingestion + analytics |
+| **业务区**（13 张） | `sys_user`、`audit_log`、`topic`、`topic_keyword`、`source_channel`、`topic_channel`、`alert_rule`、`alert_record`、`ticket`、`ticket_log`、`report`、`report_file`、`task_run` | 服务层 |
+
+DDL 是权威定义（`sql/analysis/` 与 `sql/business/`），ORM 是它的代码映射。
+改表结构的顺序：**先改 DDL → 再改 ORM → 跑 `check` 校验**。
 
 ## 启动
 
@@ -57,6 +102,27 @@ uvicorn app.main:app --reload           # 开发期热重载
 
 > ⚠️ **必须单 worker 运行**。事件总线与主持人会话是进程内状态，多 worker 会导致事件丢失
 > （详见设计规格 ADR-05）。`main.py` 已写死 `workers=1`。
+
+## 前端
+
+前端是独立的 npm 工程（`front/`），依赖与后端完全隔离。
+
+```bash
+cd front
+npm install            # 已配置国内镜像（.npmrc）
+npm run dev            # 开发服务器 http://localhost:5173，/api 已代理到后端 8000
+npm run build          # 类型检查 + 生产构建，输出 front/dist/
+```
+
+详细的目录说明、接口约定与开发须知见 `front/README.md`。
+
+## 测试
+
+```bash
+python -m unittest discover -v
+```
+
+纯标准库 unittest，不需要 pytest——随时可跑，不构成额外的环境负担。
 
 ## 目录结构
 
@@ -80,6 +146,9 @@ sentiment_analyse/
 │   └── report_engine/       报告引擎
 ├── data/                    数据资产（生成器、SQL、评测集）
 ├── docs/                    需求与设计文档
+├── sql/                     建表 DDL（分析区 / 业务区）
+├── front/                   前端工程（Vue 3 + Vite + TS，独立的 npm 工程）
+├── tests/                   单元测试（标准库 unittest，无需额外依赖）
 ├── logs/                    运行日志（按角色分流，已 gitignore）
 ├── main.py                  服务启动入口
 ├── pyproject.toml           依赖声明与镜像配置

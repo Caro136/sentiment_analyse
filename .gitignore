@@ -5,7 +5,14 @@ __pycache__/
 venv/
 .env
 logs/
-data/report/
+docs/reports/
+
+# 前端
+node_modules/
+front/dist/
 .idea/
 .vscode/
 
+.env.example
+.gitignore
+data/

@@ -1,0 +1,89 @@
+/**
+ * 全局样式与设计令牌。
+ *
+ * 风险等级与情感倾向的配色在这里统一定义——它们会出现在大屏、卡片、
+ * 标签、图表等所有位置，各自定义必然出现"同一个 S 级在不同页面颜色不同"。
+ */
+
+:root {
+  /* 情感倾向 */
+  --sentiment-positive: #52a55c;
+  --sentiment-neutral: #8a919f;
+  --sentiment-negative: #e05252;
+
+  /* 风险等级：S 最醒目，C 最克制 */
+  --risk-s: #c81e1e;
+  --risk-a: #e8663d;
+  --risk-b: #d9a441;
+  --risk-c: #7c8794;
+
+  /* 布局尺寸 */
+  --layout-header-height: 56px;
+  --layout-sidebar-width: 208px;
+
+  --color-bg: #f4f6f9;
+  --color-border: #e4e7ed;
+  --color-text-secondary: #6b7280;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  color: #1f2937;
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 情感 / 风险标签的通用样式，供各页面复用 */
+.tag-sentiment-positive { color: var(--sentiment-positive); }
+.tag-sentiment-neutral { color: var(--sentiment-neutral); }
+.tag-sentiment-negative { color: var(--sentiment-negative); }
+
+.tag-risk-S { color: #fff; background: var(--risk-s); }
+.tag-risk-A { color: #fff; background: var(--risk-a); }
+.tag-risk-B { color: #fff; background: var(--risk-b); }
+.tag-risk-C { color: #fff; background: var(--risk-c); }
+
+/* 骨架阶段的占位提示，功能实现后应逐步移除 */
+.placeholder-note {
+  color: var(--color-text-secondary);
+  line-height: 1.9;
+}
+
+.placeholder-note code {
+  padding: 1px 6px;
+  background: #eef1f5;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+/* 滚动条：表格与长列表里默认滚动条过宽，影响信息密度 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c9ced6;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #aeb5bf;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

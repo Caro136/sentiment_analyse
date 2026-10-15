@@ -610,7 +610,11 @@ CONTENT_LIBRARY = {
 
     "policy_benefit": {
         ROLE_ORIGIN: [
-            {"sentiment": SENTIMENT_POSITIVE, "emotion": EMOTION_NONE,
+            # 公告本身是**事实陈述**，标中性而非正向。
+            # 曾经的标注把它算作正向，导致模型判中性时被记为错误——
+            # 那是标注口径的问题，不是模型的问题。
+            # 「利好」体现在后续的媒体解读与用户讨论里（那些才带评价性）。
+            {"sentiment": SENTIMENT_NEUTRAL, "emotion": EMOTION_NONE,
              "title": "关于延续新能源汽车车辆购置税减免政策的公告",
              "texts": [
                  "为支持新能源汽车产业发展，经研究决定，延续实施新能源汽车车辆购置税减免政策。"

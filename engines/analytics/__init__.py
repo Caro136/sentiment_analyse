@@ -1,14 +1,40 @@
-"""认知分析（T-10~T-12，对应 PRD FR-20~FR-35）。
+"""认知分析：情感识别、舆情烈度、风险分级、实体与聚类。
 
-职责：情感三分类与细粒度情绪、舆情烈度指数、风险分级 S/A/B/C、
-     命名实体抽取与关系构建、语义聚类与事件归并、观点聚类、证据强度评估。
+本层是接入层与研判层之间的**共享分析底座**：内容入库即打标，
+大盘、筛选、预警、研判都消费它的产出（设计规格 ADR-02）。
 
-为什么独立成层（ADR-02）：打标发生在**内容入库时**，消费方是大盘、筛选、预警
-——它们都不经过 Agent。参考实现把这类逻辑放在 insight_agent 内部，
-只服务于报告生成，无法满足本项目的实时打标需求。
-
-不做：生成报告文案（交 report_engine）、触发告警（交 alerting）。
-
-⚠️ 一致性纪律（D-08）：`insight_agent` 必须复用本层产出的标签，不得重算情感，
-否则会出现"大屏显示负向 60%、报告里写负向 45%"的自相矛盾。
+已实现：
+  - intensity   烈度指数与风险分级（FR-22 / FR-23）
+  - sentiment   情感与情绪识别（FR-20 / FR-21）
+  - schemas     结构化输出模型
+  - prompts     判定提示词
+  - repository  content_analysis 读写（FR-24 人工复核保护）
+  - service     批量打标编排
+待实现：
+  - entities    命名实体与关系（FR-25 / FR-26，T-11）
+  - clustering  语义聚类与观点聚类（FR-27 / FR-28，T-11）
 """
+
+from engines.analytics.intensity import (
+    DEFAULT_WEIGHTS,
+    LEVEL_THRESHOLDS,
+    IntensityInput,
+    IntensityResult,
+    compute_intensity,
+    explain,
+    level_of,
+)
+from engines.analytics.schemas import SentimentJudgement
+from engines.analytics.service import (
+    MODEL_VERSION,
+    AnalysisResult,
+    AnalysisStats,
+    analyze_contents,
+)
+
+__all__ = [
+    "IntensityInput", "IntensityResult", "compute_intensity", "level_of", "explain",
+    "DEFAULT_WEIGHTS", "LEVEL_THRESHOLDS",
+    "SentimentJudgement",
+    "analyze_contents", "AnalysisResult", "AnalysisStats", "MODEL_VERSION",
+]

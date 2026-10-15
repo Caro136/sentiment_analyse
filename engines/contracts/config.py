@@ -12,6 +12,7 @@
 配置项不得散落在业务代码中直接读环境变量——一律经本模块取值。
 """
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -21,8 +22,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # engines/contracts/config.py → 上溯三层为项目根
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_REPORT_DIR = PROJECT_ROOT / "data" / "report"
+DEFAULT_REPORT_DIR = PROJECT_ROOT / "docs" / "reports"
 ENV_FILE = PROJECT_ROOT / ".env"
+
+# 云端可用的默认向量编码模型
+DEFAULT_EMBEDDING_MODEL = "text-embedding-v4"
+
+# 盘符开头（C:\...）或含路径分隔符 → 判定为本地模型路径而非云端模型名
+_PATH_PATTERN = re.compile(r"^[A-Za-z]:[\\/]|[\\/]")
+
+
+def _looks_like_local_path(value: str) -> bool:
+    """判断配置值是不是本地模型目录而非云端模型名。"""
+    return bool(_PATH_PATTERN.search(value or ""))
 
 
 class LLMRoleSettings(BaseModel):
@@ -35,6 +47,11 @@ class LLMRoleSettings(BaseModel):
     api_key: str = ""
     base_url: str = ""
     model_name: str = ""
+    # 留空则使用模型默认值。打标类角色建议低温度（结果稳定），
+    # 撰写类角色可略高（表达多样）。环境变量形如 INSIGHT_ENGINE_TEMPERATURE。
+    temperature: float | None = None
+    max_tokens: int | None = None
+    timeout_seconds: float = 120.0
 
     @property
     def configured(self) -> bool:
@@ -46,9 +63,13 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
-        env_nested_delimiter="_",   # INSIGHT_ENGINE_API_KEY → insight_engine.api_key
         case_sensitive=False,
         extra="ignore",             # 允许 .env 中存在未被使用的键
+        # ⚠️ 不要设置 env_nested_delimiter：角色字段名本身含下划线
+        # （insight_engine），与 "_" 分隔符产生切分歧义——
+        # INSIGHT_ENGINE_API_KEY 无法确定是 insight_engine.api_key 还是
+        # insight.engine.api.key，结果是**整个 .env 静默解析失败**。
+        # 角色配置因此改用扁平字段，见下方「角色级模型配置」。
     )
 
     # ---------------- 服务 ----------------
@@ -66,12 +87,45 @@ class Settings(BaseSettings):
     db_charset: str = "utf8mb4"
 
     # ---------------- 角色级模型配置 ----------------
-    analytics: LLMRoleSettings = Field(default_factory=LLMRoleSettings)
-    insight_engine: LLMRoleSettings = Field(default_factory=LLMRoleSettings)
-    media_engine: LLMRoleSettings = Field(default_factory=LLMRoleSettings)
+    # 扁平字段而非嵌套模型。嵌套写法更优雅，但与 pydantic-settings 的环境变量
+    # 解析机制冲突（见 model_config 中的说明），会静默读不到任何值。
+    # 由 llm_for_role() 组装为 LLMRoleSettings 供调用方使用。
+
+    analytics_api_key: str = ""
+    analytics_base_url: str = ""
+    analytics_model_name: str = ""
+    analytics_temperature: float | None = None
+    analytics_max_tokens: int | None = None
+    analytics_timeout_seconds: float = 120.0
+
+    insight_engine_api_key: str = ""
+    insight_engine_base_url: str = ""
+    insight_engine_model_name: str = ""
+    insight_engine_temperature: float | None = None
+    insight_engine_max_tokens: int | None = None
+    insight_engine_timeout_seconds: float = 120.0
+
+    media_engine_api_key: str = ""
+    media_engine_base_url: str = ""
+    media_engine_model_name: str = ""
+    media_engine_temperature: float | None = None
+    media_engine_max_tokens: int | None = None
+    media_engine_timeout_seconds: float = 120.0
+
     # 前缀为 host_agent 而非 host，避免与服务监听地址 HOST 冲突
-    host_agent: LLMRoleSettings = Field(default_factory=LLMRoleSettings)
-    report_engine: LLMRoleSettings = Field(default_factory=LLMRoleSettings)
+    host_agent_api_key: str = ""
+    host_agent_base_url: str = ""
+    host_agent_model_name: str = ""
+    host_agent_temperature: float | None = None
+    host_agent_max_tokens: int | None = None
+    host_agent_timeout_seconds: float = 120.0
+
+    report_engine_api_key: str = ""
+    report_engine_base_url: str = ""
+    report_engine_model_name: str = ""
+    report_engine_temperature: float | None = None
+    report_engine_max_tokens: int | None = None
+    report_engine_timeout_seconds: float = 120.0
 
     # ---------------- 公域搜索 ----------------
     search_tool_type: str = "bocha"
@@ -86,8 +140,14 @@ class Settings(BaseSettings):
     milvus_uri: str = "http://localhost:19530"
     milvus_db_name: str = "default"
     milvus_insight_collection: str = "insight_evidence"
-    embedding_model: str = ""
     insight_vector_top_k: int = 80
+
+    # ---------------- 文本向量编码 ----------------
+    # 留空时回落到 DashScope 配置（同一套密钥通常可共用），见 embedding_settings
+    embedding_model: str = ""
+    embedding_api_key: str = ""
+    embedding_base_url: str = ""
+    embedding_batch_size: int = 10      # DashScope 的单次请求上限；超限时编码器会自动拆分
 
     # ---------------- OCR 云服务（MCP / SSE）----------------
     ocr_mcp_url: str = "https://dashscope.aliyuncs.com/api/v1/mcps/ai-ocr/sse"
@@ -149,6 +209,24 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
+    def embedding_settings(self) -> tuple[str, str, str]:
+        """文本向量编码的 (api_key, base_url, model)。
+
+        未单独配置时回落到 DashScope：向量编码与 OCR 用的是同一家的服务，
+        再让使用者重复填一遍密钥没有意义。
+
+        ⚠️ `EMBEDDING_MODEL` 可能被配成本地模型路径（课程资料里的 bge-m3 目录）。
+        那种值发给云端接口必然 404，且报错信息（"model F:\\... does not exist"）
+        很容易被误读成"没有权限"。识别出路径形态就回落到云端默认模型。
+        """
+        api_key = self.embedding_api_key or self.dashscope_api_key
+        base_url = self.embedding_base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        model = self.embedding_model
+        if not model or _looks_like_local_path(model):
+            model = DEFAULT_EMBEDDING_MODEL
+        return api_key, base_url, model
+
+    @property
     def intensity_weights(self) -> dict[str, float]:
         """烈度指数四项权重（对应设计规格 Q1，可按业务反馈调整后重跑评测集）。"""
         return {
@@ -170,10 +248,26 @@ class Settings(BaseSettings):
         return path
 
     def llm_for_role(self, role_key: str) -> LLMRoleSettings:
-        """按角色取模型配置。未知角色直接报错，避免静默用错模型。"""
+        """按角色取模型配置。未知角色直接报错，避免静默用错模型。
+
+        由扁平字段组装：角色前缀（analytics / insight_engine / ...）来自角色注册表，
+        新增角色时只需在 roles.py 登记并在本类补上对应字段。
+        """
         from .roles import get_role_info
 
-        return getattr(self, get_role_info(role_key).config_attr)
+        prefix = get_role_info(role_key).config_attr
+
+        def _get(suffix: str, default=None):
+            return getattr(self, f"{prefix}_{suffix}", default)
+
+        return LLMRoleSettings(
+            api_key=_get("api_key", ""),
+            base_url=_get("base_url", ""),
+            model_name=_get("model_name", ""),
+            temperature=_get("temperature"),
+            max_tokens=_get("max_tokens"),
+            timeout_seconds=_get("timeout_seconds", 120.0),
+        )
 
     def startup_diagnostics(self) -> list[tuple[str, bool, str]]:
         """启动自检：列出各能力的就绪情况，便于快速定位「没配密钥」。

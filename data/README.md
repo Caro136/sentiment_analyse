@@ -104,7 +104,10 @@ mysql -u root -p < data/sql/90_import_all.sql
 
 ### 复用课程的表（字段原样，一字未改）
 
-| 表 | 信源 | 记录数（small / prd） |
+> 下表的记录数是**参考值**——实际条数随 `--end-time` 与随机数序列浮动。
+> 以 `python -m engines.common.db.init_db --status` 的实测结果为准。
+
+| 表 | 信源 | 记录数（small / prd，参考） |
 |----|------|---------------------|
 | `weibo_note` | 社交媒体-内容 | 241 / 4806 |
 | `weibo_note_comment` | 社交媒体-评论 | 2678 / 36517 |
