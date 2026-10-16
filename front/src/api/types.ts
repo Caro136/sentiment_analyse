@@ -707,6 +707,52 @@ export interface ReportCreatePayload {
   query?: string
 }
 
+// ---------------------------------------------------------------------------
+// 研判任务（后端 T-16 的接入部分 / app/schemas/research.py）
+// ---------------------------------------------------------------------------
+
+/** 参与研判的分析角色。主持人不在其中——它由编排层按固定顺序管理 */
+export type ResearchRole = 'insight' | 'media'
+
+export const RESEARCH_ROLE_LABELS: Record<ResearchRole, string> = {
+  insight: '私域研究员',
+  media: '公域研究员',
+}
+
+export interface ResearchStartPayload {
+  /** 研判主题词（与 topic_id 二选一）。它同时是三方产物文件名里的键 */
+  query?: string
+  topic_id?: string
+  roles?: ResearchRole[]
+}
+
+export interface ResearchStartResult {
+  task_id: string
+  /** 任务已受理；进度经 SSE（role_progress）推送，不在本接口等待 */
+  started: boolean
+  query: string
+  status: string
+  roles: string[]
+}
+
+export interface ResearchRoleResult {
+  display_name: string
+  ok: boolean
+  report_path: string
+  summary: string
+  error: string
+  duration: number
+}
+
+export interface ResearchTaskView {
+  task_id: string
+  query: string
+  status: 'running' | 'completed' | 'failed'
+  duration: number
+  /** 角色 key → 结果 */
+  results: Record<string, ResearchRoleResult>
+}
+
 export interface UserInfo {
   user_id: string
   username: string

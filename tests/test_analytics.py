@@ -341,5 +341,50 @@ class AnalyzeServiceTest(unittest.TestCase):
         self.assertIn("风险", text)
 
 
+class PublishLabeledTest(unittest.TestCase):
+    """打标完成事件：analytics → 预警的事件驱动接缝（FR-52 / 设计规格 8.2）。
+
+    这条接缝断掉的表现是**预警静默失效**：内容照常入库、大盘照常更新，
+    一条告警都不出来，而且不报错——所以它必须有测试盯着。
+    早先这里写成 `label.content_uid`，而 `AnalysisLabel` 根本没有这个字段
+    （内容标识是字典的键），于是每次真打到标都会在链路末尾抛 AttributeError
+    （T-34 端到端联调实测踩到）。
+    """
+
+    def test_publishes_uids_and_negative_count(self) -> None:
+        from unittest.mock import patch
+
+        from engines.analytics.service import AnalysisResult, _publish_labeled
+        from engines.contracts.content import AnalysisLabel
+
+        result = AnalysisResult(labels={
+            "uid1": AnalysisLabel(sentiment="negative"),
+            "uid2": AnalysisLabel(sentiment="positive"),
+            "uid3": AnalysisLabel(sentiment="negative"),
+        })
+        captured: dict = {}
+
+        with patch("engines.common.eventing.publishers.publish_content_labeled",
+                   lambda uids, **kwargs: captured.update(uids=uids, **kwargs)):
+            _publish_labeled(result, topic_id="tp1")
+
+        self.assertEqual(sorted(captured["uids"]), ["uid1", "uid2", "uid3"])
+        self.assertEqual(captured["topic_ids"], ["tp1"])
+        self.assertEqual(captured["negative_count"], 2)
+
+    def test_empty_labels_publishes_nothing(self) -> None:
+        from unittest.mock import patch
+
+        from engines.analytics.service import AnalysisResult, _publish_labeled
+
+        calls: list = []
+
+        with patch("engines.common.eventing.publishers.publish_content_labeled",
+                   lambda *a, **k: calls.append(a)):
+            _publish_labeled(AnalysisResult(labels={}), topic_id=None)
+
+        self.assertEqual(calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

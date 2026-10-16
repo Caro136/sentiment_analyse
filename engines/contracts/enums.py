@@ -337,6 +337,7 @@ class AuditAction(str, Enum):
     TICKET_FLOW = "ticket_flow"                # 工单创建、状态流转与批注（T-25，FR-49/50）
     DRAFT_ADOPT = "draft_adopt"                # 采纳公关回应草案（T-25，FR-51）
     REPORT_GENERATE = "report_generate"        # 发起报告生成（待接 T-27，FR-58）
+    RESEARCH_RUN = "research_run"              # 发起多智能体研判（T-16，FR-64）
     REPORT_EXPORT = "report_export"            # 报告导出（待接 T-27，FR-61）
     DATA_RESET = "data_reset"                  # 数据重置（待接 T-28，FR-75）
 
@@ -353,6 +354,7 @@ class AuditAction(str, Enum):
             "ticket_flow": "工单流转",
             "draft_adopt": "采纳回应草案",
             "report_generate": "生成报告",
+            "research_run": "发起研判",
             "report_export": "导出报告",
             "data_reset": "数据重置",
         }[self.value]

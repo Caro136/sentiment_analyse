@@ -39,6 +39,12 @@ STATUS_RUNNING = "running"
 STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 
+# 等待主持人收尾的上限与轮询间隔。
+# 主持人每个维度一次模型调用（实测 ~110s/次，还带重试），五维研判 + 最终裁判
+# 十几分钟是正常的——所以上限给到 15 分钟，而不是把慢当成失败。
+HOST_WAIT_TIMEOUT_SECONDS = 900.0
+HOST_POLL_SECONDS = 2.0
+
 
 @dataclass
 class RoleOutcome:
@@ -63,6 +69,10 @@ class ResearchTask:
     started_at: float = field(default_factory=time.time)
     finished_at: float = 0.0
     outcomes: dict[str, RoleOutcome] = field(default_factory=dict)
+    # 主持人最终裁判的落盘路径：报告引擎靠它（与两个角色的产物一起）拼五段式
+    host_path: str = ""
+    # 任务级失败原因（例如主持人未在限时内完成），与角色级的 error 分开
+    error: str = ""
 
     @property
     def duration(self) -> float:
@@ -84,6 +94,10 @@ class ResearchTask:
             mark = "✓" if outcome.ok else "✗"
             detail = outcome.error or outcome.summary or outcome.report_path
             parts.append(f"  {mark} {outcome.display_name}：{detail}")
+        if self.host_path:
+            parts.append(f"  主持人最终裁判：{self.host_path}")
+        if self.error:
+            parts.append(f"  ✗ {self.error}")
         return "\n".join(parts)
 
     def to_dict(self) -> dict:
@@ -93,6 +107,8 @@ class ResearchTask:
             "query": self.query,
             "status": self.status,
             "duration": round(self.duration, 1),
+            "host_path": self.host_path,
+            "error": self.error,
             "results": {
                 role: {
                     "display_name": outcome.display_name,
@@ -115,8 +131,10 @@ class ResearchOrchestrator:
     两个主题的同名维度会被错误地凑成一对）。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, host_timeout: float = HOST_WAIT_TIMEOUT_SECONDS) -> None:
         self._host = HostAgent()
+        # 等主持人收尾的上限可注入：测试里要能在毫秒级验证「等」这件事本身
+        self._host_timeout = host_timeout
         self._tasks: dict[str, ResearchTask] = {}
         self._current: ResearchTask | None = None
         self._lock = asyncio.Lock()
@@ -210,9 +228,34 @@ class ResearchOrchestrator:
         for outcome in outcomes:
             task.outcomes[outcome.role] = outcome
 
+        # **两个角色跑完 ≠ 研判完成**：主持人还在按维度配对、逐维研判、写最终裁判与产物。
+        # 不等它就置 completed 的后果很直接——调用方看到 completed 就去生成报告，
+        # 而报告引擎找不到 `host_*.md`，以「产物尚未生成」失败（T-34 实测踩到）。
+        host = await self._await_host()
+        task.host_path = host.report_path
         task.finished_at = time.time()
-        task.status = STATUS_COMPLETED if task.failed_roles == [] else STATUS_FAILED
+        if not host.complete:
+            task.status = STATUS_FAILED
+            task.error = (f"主持人未在 {self._host_timeout:.0f}s 内完成最终裁判"
+                          f"（已研判 {len(host.judged)}/5 维），三方产物不齐")
+        else:
+            task.status = STATUS_COMPLETED if task.failed_roles == [] else STATUS_FAILED
         logger.info("研判任务 {} 结束：\n{}", task.task_id, task.render())
+
+    async def _await_host(self):
+        """等主持人收尾（五维研判完毕 + 最终裁判已落盘）。
+
+        主持人是事件驱动的、不归编排层调用，所以这里只能轮询它的状态——
+        它每个维度要一次模型调用（实测 ~110s/次），五维加最终裁判十几分钟是正常的。
+        主持人已停（例如被 `stop()`）时立即返回，不空等满超时。
+        """
+        deadline = time.monotonic() + self._host_timeout
+        while time.monotonic() < deadline:
+            status = self._host.status()
+            if status.complete or not status.running:
+                return status
+            await asyncio.sleep(HOST_POLL_SECONDS)
+        return self._host.status()
 
     # ------------------------------------------------------------------
 

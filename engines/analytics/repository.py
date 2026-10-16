@@ -117,11 +117,20 @@ def make_event_id(scope: str) -> str:
 
 
 async def ensure_event(session: AsyncSession, scope: str, *, title: str = "",
-                       topic_id: str | None = None) -> str:
+                       topic_id: str | None = None,
+                       sync_title: bool = False) -> str:
     """确保事件存在，返回 event_id。
 
     `scope` 通常是主题关键词——一个监测主题对应一个事件专题。
     更细的子事件拆分（同一主题下的多个子话题）留给事件研判阶段。
+
+    **标题为什么要同步（`sync_title=True`）**：事件标题是人读的名字，而它同时是
+    「从事件发起报告」时加载三方产物的键（`report_engine` 按 query 找
+    `insight_*` / `media_*` / `host_*`）。事件由预警链路创建时只用得上主题关键词
+    （`evt_<keyword>` 的 ID 稳定，标题当时随手写成关键词），而研判用的是**主题名称**——
+    两者不一致时报告会以「主持人研判、私域分析、公域分析 的产物尚未生成」失败，
+    且看不出是键不一致（T-34 端到端联调实测踩到）。因此由知道主题名称的调用方
+    （监测链路）显式开启同步，预警链路不开启——免得多方来回改写标题。
     """
     event_id = make_event_id(scope)
     existing = (await session.execute(
@@ -134,6 +143,9 @@ async def ensure_event(session: AsyncSession, scope: str, *, title: str = "",
             status="monitoring",
             created_at=int(time.time()),
         ))
+        await session.flush()
+    elif sync_title and title and existing.title != title:
+        existing.title = title
         await session.flush()
     return event_id
 

@@ -36,7 +36,7 @@ DROP TABLE IF EXISTS `audit_log`;
 CREATE TABLE `audit_log` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `user_id` varchar(64) NULL DEFAULT NULL COMMENT '操作人',
-  `action` varchar(64) NOT NULL COMMENT '动作：login/user_create/user_update/user_reset_password/config_update/risk_override/alert_ack/ticket_flow/draft_adopt/report_generate/report_export/data_reset（取值见 contracts/enums.py 的 AuditAction）',
+  `action` varchar(64) NOT NULL COMMENT '动作：login/user_create/user_update/user_reset_password/config_update/risk_override/alert_ack/ticket_flow/draft_adopt/report_generate/research_run/report_export/data_reset（取值见 contracts/enums.py 的 AuditAction）',
   `target` varchar(255) NULL DEFAULT NULL COMMENT '操作对象',
   `before_value` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL COMMENT '变更前值',
   `after_value` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL COMMENT '变更后值',

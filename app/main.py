@@ -20,6 +20,7 @@ from app.routers.config import router as config_router
 from app.routers.contents import router as contents_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.reports import router as report_router
+from app.routers.research import router as research_router
 from app.routers.system import router as system_router
 from app.routers.events import router as event_router
 from app.routers.sse import router as sse_router
@@ -129,6 +130,7 @@ def _build_routers() -> tuple[APIRouter, APIRouter]:
     protected.include_router(contents_router)  # 舆情内容查询（T-22）
     protected.include_router(event_router)     # 事件与溯源（T-23）
     protected.include_router(alert_router)     # 预警（T-24）
+    protected.include_router(research_router)  # 研判任务（T-16 的接入部分，T-34 补齐）
     protected.include_router(ticket_router)    # 处置工单（T-25）
     protected.include_router(ticket_event_router)  # 事件下的回应草案生成（T-25）
     protected.include_router(dashboard_router)  # 态势大盘（T-26）

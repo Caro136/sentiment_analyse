@@ -36,6 +36,26 @@ class FakeResult:
         return "角色完成：5 章" if self.ok else f"失败：{self.error}"
 
 
+class FakeHost:
+    """主持人替身：只回答「完成没有、产物在哪」，不真的研判。"""
+
+    def __init__(self, *, complete: bool, report_path: str = "",
+                 running: bool = True, judged: tuple[str, ...] = ()) -> None:
+        from engines.host_agent.agent import HostStatus
+
+        self._status = HostStatus(running=running, complete=complete,
+                                  report_path=report_path, judged=list(judged))
+
+    def start(self, query: str) -> None:  # noqa: ARG002 —— 替身忽略参数
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    def status(self):
+        return self._status
+
+
 class RegistryTest(unittest.TestCase):
     def test_two_roles_registered(self) -> None:
         self.assertEqual(role_names(), ["insight", "media"])
@@ -124,7 +144,13 @@ class OrchestratorTest(unittest.TestCase):
 
         for key in behaviour:
             registry[key] = ResearchRole(key, registry[key].display_name, make(key))
-        return ResearchOrchestrator()
+        # 等主持人收尾的超时压到 0.2s：这些用例里没人发章节事件，
+        # 主持人永远不会 complete，用默认的 900s 会让测试挂住。
+        # 同时装一个「已完成」的主持人替身——本类关注角色行为，
+        # 「主持人还没完成」的情形由 HostWaitTest 单独覆盖。
+        orch = ResearchOrchestrator(host_timeout=0.2)
+        orch._host = FakeHost(complete=True, report_path="/tmp/host.md")
+        return orch
 
     def test_task_completes_when_all_roles_succeed(self) -> None:
         orch = self._install({
@@ -240,6 +266,97 @@ class OrchestratorTest(unittest.TestCase):
 
         removed = asyncio.run(run())
         self.assertEqual(removed, 1)
+
+
+class SequencedHost(FakeHost):
+    """前 `pending_calls` 次 `status()` 报「未完成」，之后报「已完成」。
+
+    用来验证「编排层确实在等主持人」这件事本身——静态替身证明不了等待。
+    """
+
+    def __init__(self, *, pending_calls: int, report_path: str = "/tmp/host.md") -> None:
+        super().__init__(complete=False, report_path=report_path)
+        self._remaining = pending_calls
+        self._report_path = report_path
+
+    def status(self):
+        from engines.host_agent.agent import HostStatus
+
+        if self._remaining > 0:
+            self._remaining -= 1
+            return HostStatus(running=True, complete=False,
+                              judged=["background_overview"])
+        return HostStatus(running=True, complete=True, report_path=self._report_path)
+
+
+class HostWaitTest(unittest.TestCase):
+    """角色跑完 ≠ 研判完成：主持人还在研判时不能报 completed。
+
+    这条约束是 T-34 端到端联调逼出来的：编排层原先在**两个角色返回**时就把任务置为
+    completed，调用方据此立刻去生成报告——而主持人还没写完最终裁判，
+    报告引擎找不到 `host_*.md`，只能以「产物尚未生成」失败，且看不出是为什么。
+    """
+
+    def setUp(self) -> None:
+        self._original = dict(get_registry())
+
+    def tearDown(self) -> None:
+        registry = get_registry()
+        registry.clear()
+        registry.update(self._original)
+
+    def _install(self, host: FakeHost) -> ResearchOrchestrator:
+        registry = get_registry()
+
+        def make(key: str):
+            async def bound(query: str):  # noqa: ARG001
+                return FakeResult(ok=True)
+            return bound
+
+        for key in ("insight", "media"):
+            registry[key] = ResearchRole(key, registry[key].display_name, make(key))
+        # 等待上限同样压小：验证的是「会等、等不到会如实标失败」，不是等多久
+        orch = ResearchOrchestrator(host_timeout=0.2)
+        orch._host = host
+        return orch
+
+    def _run(self, orch: ResearchOrchestrator) -> ResearchTask:
+        from unittest.mock import patch
+
+        async def run():
+            task = await orch.start("测试主题")
+            for _ in range(200):
+                if task.status != STATUS_RUNNING:
+                    break
+                await asyncio.sleep(0.01)
+            await orch.stop()
+            return task
+
+        # 轮询间隔压到 10ms：验证的是「会等」，不是「等多久」
+        with patch("engines.orchestration.research.HOST_POLL_SECONDS", 0.01):
+            return asyncio.run(run())
+
+    def test_waits_for_host_then_completes(self) -> None:
+        task = self._run(self._install(SequencedHost(pending_calls=3)))
+
+        self.assertEqual(task.status, STATUS_COMPLETED)
+        self.assertEqual(task.host_path, "/tmp/host.md")
+        self.assertEqual(task.error, "")
+
+    def test_incomplete_host_marks_task_failed(self) -> None:
+        """主持人没写完就不能算完成——宁可如实标失败，也不给一个「假完成」。"""
+        task = self._run(self._install(FakeHost(complete=False)))
+
+        self.assertEqual(task.status, STATUS_FAILED)
+        self.assertIn("主持人", task.error)
+        self.assertEqual(task.host_path, "")
+        self.assertIn("主持人", task.render())
+
+    def test_host_stopped_returns_immediately(self) -> None:
+        """主持人已停（running=False）时立即返回，不空等满超时。"""
+        task = self._run(self._install(FakeHost(complete=False, running=False)))
+
+        self.assertEqual(task.status, STATUS_FAILED)
 
 
 if __name__ == "__main__":

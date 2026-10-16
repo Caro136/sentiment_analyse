@@ -252,13 +252,20 @@ def _publish_labeled(result: AnalysisResult, *, topic_id: str | None) -> None:
 
     事件只带标识与主题，不带标签内容（订阅方自己去分析区读）。发布是同步 O(1) 的：
     订阅方只入队，扫描由它自己的 worker 协程做（见 `alerting/listener.py`）。
+
+    ⚠️ `result.labels` 是 **uid → 标签的字典，而 `AnalysisLabel` 本身不带 uid**
+    （见 `contracts/content.py`）：内容标识是**字典的键**。早先这里写成
+    `[label.content_uid for label in result.labels]`——遍历字典拿到的是 uid 字符串，
+    `.content_uid` 必然 AttributeError，而那一刻标签已经落库了，于是表现为
+    「内容照常打标、预警一条都不出」，报错还落在链路最末尾（T-34 联调实测踩到）。
     """
     from engines.common.eventing.publishers import publish_content_labeled
 
-    if not result.labels:
+    uids = list(result.labels.keys())
+    if not uids:
         return
     publish_content_labeled(
-        [label.content_uid for label in result.labels],
+        uids,
         topic_ids=[topic_id] if topic_id else [],
-        negative_count=sum(1 for label in result.labels
+        negative_count=sum(1 for label in result.labels.values()
                            if label.sentiment == Sentiment.NEGATIVE.value))

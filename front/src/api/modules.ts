@@ -32,6 +32,9 @@ import type {
   ReportItem,
   ReportStatus,
   ReportType,
+  ResearchStartPayload,
+  ResearchStartResult,
+  ResearchTaskView,
   ResponseDraft,
   RiskLevel,
   RiskOverridePayload,
@@ -201,11 +204,17 @@ export const ticketApi = {
     http.post<TicketDetail>(`/tickets/${encodeURIComponent(ticketId)}/draft`, payload),
 }
 
-/** 研判任务（后端 T-16 实现） */
+/** 研判任务（后端 T-16 的接入部分，API-22/23） */
 export const researchApi = {
-  start: (payload: { query: string; topic_id?: string }) =>
-    http.post<{ task_id: string; started: boolean }>('/research', payload),
-  result: (taskId: string) => http.get<unknown>(`/research/${taskId}`),
+  /**
+   * 发起多智能体研判（FR-64）。目标二选一：`query` 或 `topic_id`。
+   * **同时只允许一个任务**——已有任务在跑会返回 409。
+   */
+  start: (payload: ResearchStartPayload) =>
+    http.post<ResearchStartResult>('/research', payload),
+  /** 任务状态与各角色结果（FR-66）。进度经 SSE 推送，不在这里轮询 */
+  task: (taskId: string) =>
+    http.get<ResearchTaskView>(`/research/${encodeURIComponent(taskId)}`),
 }
 
 /** 报告中心（后端 T-27 实现） */
