@@ -7,7 +7,12 @@
  *   3. 鉴权失效（AUTH_001/002）自动跳登录，并记住原地址
  *   4. trace_id 透传——报错时能一条 id 串起前后端日志
  */
-import axios, { AxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios'
+import axios, {
+  AxiosError,
+  type AxiosInstance,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+} from 'axios'
 import { ElMessage } from 'element-plus'
 
 /** 后端统一错误响应体（设计规格 6.3） */
@@ -72,8 +77,10 @@ instance.interceptors.request.use((config) => {
 
 // 响应拦截：解包 + 归一化错误
 instance.interceptors.response.use(
-  (response) => response.data,
-  (error: AxiosError<ApiErrorBody>) => {
+  // 下载类请求（responseType=blob）保留**完整响应**：文件名在 Content-Disposition 里，
+  // 提示在 X-Export-Hint 里（例如「PDF 请用浏览器打印」，D-07），只留 data 就都丢了
+  (response) => (response.config.responseType === 'blob' ? response : response.data),
+  async (error: AxiosError<ApiErrorBody>) => {
     // 无响应（网络中断、超时、被取消）
     if (!error.response) {
       const message = error.code === 'ECONNABORTED'
@@ -82,7 +89,8 @@ instance.interceptors.response.use(
       return Promise.reject(new ApiError(message, { code: 'NETWORK' }))
     }
 
-    const { status, data } = error.response
+    const { status } = error.response
+    const data = await readErrorBody(error.response.data)
     const apiError = new ApiError(describeError(data, `请求失败（HTTP ${status}）`), {
       code: data?.code ?? `HTTP_${status}`,
       detail: data?.detail,
@@ -101,6 +109,24 @@ instance.interceptors.response.use(
     return Promise.reject(apiError)
   },
 )
+
+/**
+ * 读出错误响应体。
+ *
+ * 下载请求用了 `responseType: 'blob'`，**错误响应体也是 Blob**——直接当成对象读，
+ * 只能得到「请求失败（HTTP 422）」，而 422 恰恰是「PDF 请改用浏览器打印」这类
+ * 需要原样转告用户的说明（D-07）。
+ */
+async function readErrorBody(raw: unknown): Promise<ApiErrorBody | undefined> {
+  if (raw instanceof Blob) {
+    try {
+      return JSON.parse(await raw.text()) as ApiErrorBody
+    } catch {
+      return undefined
+    }
+  }
+  return raw as ApiErrorBody | undefined
+}
 
 async function handleAuthFailure(): Promise<void> {
   const { useAuthStore } = await import('@/stores/auth')
@@ -141,6 +167,47 @@ export const http = {
     request<T>({ method: 'PUT', url, data }),
   delete: <T>(url: string, params?: object) =>
     request<T>({ method: 'DELETE', url, params }),
+}
+
+/** 文件下载的响应：内容、服务端建议的文件名、以及服务端给前端的提示 */
+export interface DownloadResult {
+  blob: Blob
+  filename: string
+  /** 后端提示头（`X-Export-Hint`）。报告导出用它表达「PDF 请走浏览器打印」（D-07） */
+  hint: string
+}
+
+/**
+ * 下载类请求。与 `http.get` 的区别：不走响应解包，而是把整个响应拿回来。
+ *
+ * 文件名取自 `Content-Disposition`（后端用 RFC 5987 的 `filename*=UTF-8''…` 编码，
+ * 这样中文标题不会变成乱码或下划线）。前端不自己拼文件名：拼出来的是**另一套规则**，
+ * 与磁盘上的交付物对不上，核对归档时反而添乱。
+ */
+export async function downloadFile(url: string, params?: object): Promise<DownloadResult> {
+  const response = (await request<AxiosResponse<Blob>>({
+    method: 'GET', url, params, responseType: 'blob',
+  }))
+  return {
+    blob: response.data,
+    filename: parseFilename(response.headers['content-disposition']) ?? 'download',
+    hint: String(response.headers['x-export-hint'] ?? ''),
+  }
+}
+
+/** 从 `Content-Disposition` 里取文件名（优先 RFC 5987 形式） */
+function parseFilename(disposition?: string): string | null {
+  if (!disposition) return null
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1].trim())
+    } catch {
+      return encoded[1].trim()
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(disposition)
+  return plain ? plain[1].trim() : null
 }
 
 export default instance

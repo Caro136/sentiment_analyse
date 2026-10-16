@@ -126,11 +126,12 @@ def to_view(record: ReportRecord, *, files: list[ReportFileRecord] | None = None
 
 async def list_reports(repo: ReportRepository, *, page: int = 1, page_size: int = 20,
                        topic_id: str | None = None, event_id: str | None = None,
+                       report_type: str | None = None,
                        status: str | None = None) -> tuple[int, list[dict]]:
     """报告列表（FR-57）。**不返回正文**——列表页不需要，一页报告正文可能上百 KB。"""
     total, rows = await repo.list_reports(page=page, page_size=page_size,
                                          topic_id=topic_id, event_id=event_id,
-                                         status=status)
+                                         report_type=report_type, status=status)
     views = []
     for record in rows:
         files = await repo.list_files(record.report_id)

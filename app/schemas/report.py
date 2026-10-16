@@ -19,6 +19,10 @@ class ReportQuery(PageQuery):
 
     topic_id: str | None = Field(default=None, max_length=64)
     event_id: str | None = Field(default=None, max_length=64)
+    # 报告类型是 PRD 7.3 页面上的一级分类（周期性简报 / 突发事件专项报告），
+    # 前端按它分标签页——因此必须能在服务端筛，否则前端只能筛当前这一页，
+    # 筛选结果看着对、实际不全
+    report_type: ReportType | None = None
     status: ReportStatus | None = None
 
 

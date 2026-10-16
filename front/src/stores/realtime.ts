@@ -42,6 +42,14 @@ export const useRealtimeStore = defineStore('realtime', () => {
   const lastEventAt = ref<number | null>(null)
   /** 角色 → 进度百分比 */
   const progress = ref<Record<string, number>>({})
+  /**
+   * 角色 → 最近一条进度文案。
+   *
+   * 报告生成只发 0/50/100 三档（后端在开始与结束时各发一次），单看百分比
+   * 界面会长时间停在 50%，像卡住了；把阶段说明一起显示出来，
+   * 用户才知道「正在成稿」而不是「挂了」。
+   */
+  const progressMessage = ref<Record<string, string>>({})
   /** 主持人研判消息 */
   const discussion = ref<RealtimeEvent[]>([])
   const errors = ref<RealtimeEvent[]>([])
@@ -59,6 +67,7 @@ export const useRealtimeStore = defineStore('realtime', () => {
       case EVENT_TYPES.ROLE_PROGRESS:
         if (event.role) {
           progress.value[event.role] = event.progress_pct ?? 0
+          if (event.message) progressMessage.value[event.role] = event.message
         }
         break
       case EVENT_TYPES.HOST_DISCUSSION_MESSAGE:
@@ -121,6 +130,7 @@ export const useRealtimeStore = defineStore('realtime', () => {
   /** 开始一次新的研判：清空上一轮的进度与讨论 */
   function reset(): void {
     progress.value = {}
+    progressMessage.value = {}
     discussion.value = []
     errors.value = []
   }
@@ -129,6 +139,7 @@ export const useRealtimeStore = defineStore('realtime', () => {
     connected,
     lastEventAt,
     progress,
+    progressMessage,
     roleProgress,
     discussion,
     errors,

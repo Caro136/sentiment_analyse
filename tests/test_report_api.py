@@ -65,12 +65,14 @@ class InMemoryReportRepository:
         return None
 
     async def list_reports(self, *, page, page_size, topic_id=None, event_id=None,
-                           status=None):
+                           report_type=None, status=None):
         rows = list(self.reports.values())
         if topic_id:
             rows = [r for r in rows if r.topic_id == topic_id]
         if event_id:
             rows = [r for r in rows if r.event_id == event_id]
+        if report_type:
+            rows = [r for r in rows if r.report_type == report_type]
         if status:
             rows = [r for r in rows if r.status == status]
         rows.sort(key=lambda r: r.created_at, reverse=True)
@@ -116,11 +118,12 @@ class InMemoryReportRepository:
 def make_report(report_id: str = "rpt1", *, event_id: str | None = "evt_1",
                 topic_id: str | None = None, status: str = "generating",
                 title: str = "舆情研判报告：星耀XPhone15",
+                report_type: str = "event",
                 error: str | None = None) -> ReportRecord:
     import time
 
     return ReportRecord(report_id=report_id, event_id=event_id, topic_id=topic_id,
-                        report_type="event", title=title, status=status,
+                        report_type=report_type, title=title, status=status,
                         error_message=error, generated_at=None, created_by="u1",
                         created_at=int(time.time()))
 
@@ -428,6 +431,29 @@ class ReportApiTest(unittest.IsolatedAsyncioTestCase):
         await self.login("analyst")
         body = (await self.client.get("/api/v1/reports/rpt_done")).json()
         self.assertIn("五段式", body["content_md"])
+
+    async def test_filter_by_report_type(self) -> None:
+        """报告类型是页面上的一级分类（FR-57），必须在服务端筛。
+
+        只在前端筛当前页的话，第二页的周期简报根本不会出现——
+        筛选结果看着对、实际不全。
+        """
+        self.repo.reports["rpt_periodic"] = make_report(
+            "rpt_periodic", event_id=None, topic_id="topic_1", report_type="periodic",
+            title="舆情周期简报：食品安全")
+
+        await self.login("analyst")
+        listing = (await self.client.get(
+            "/api/v1/reports", params={"report_type": "periodic"})).json()
+        self.assertEqual(listing["total"], 1)
+        self.assertEqual(listing["items"][0]["report_id"], "rpt_periodic")
+        self.assertEqual(listing["items"][0]["type_label"], "周期简报")
+
+        both = (await self.client.get("/api/v1/reports")).json()
+        self.assertEqual(both["total"], 2)
+
+        unknown = await self.client.get("/api/v1/reports", params={"report_type": "nope"})
+        self.assertEqual(unknown.status_code, 422, unknown.text)
 
     async def test_pr_cannot_generate(self) -> None:
         """发起报告是分析师的动作；公关只处置（PRD 第 2 章）。"""

@@ -98,7 +98,8 @@ class ReportRepository(Protocol):
                           topic_id: str | None = None,
                           title: str | None = None) -> ReportRecord | None: ...
     async def list_reports(self, *, page: int, page_size: int, topic_id: str | None = None,
-                           event_id: str | None = None, status: str | None = None,
+                           event_id: str | None = None, report_type: str | None = None,
+                           status: str | None = None,
                            ) -> tuple[int, list[ReportRecord]]: ...
     async def update_report(self, report_id: str, fields: dict) -> ReportRecord | None: ...
     async def add_file(self, record: ReportFileRecord) -> ReportFileRecord: ...
@@ -155,13 +156,16 @@ class SqlReportRepository:
         return _to_report(row) if row else None
 
     async def list_reports(self, *, page: int, page_size: int, topic_id: str | None = None,
-                           event_id: str | None = None, status: str | None = None,
+                           event_id: str | None = None, report_type: str | None = None,
+                           status: str | None = None,
                            ) -> tuple[int, list[ReportRecord]]:
         conditions = []
         if topic_id:
             conditions.append(Report.topic_id == topic_id)
         if event_id:
             conditions.append(Report.event_id == event_id)
+        if report_type:
+            conditions.append(Report.report_type == report_type)
         if status:
             conditions.append(Report.status == status)
 

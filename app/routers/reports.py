@@ -29,7 +29,7 @@ from app.services.monitoring.repository import SqlMonitoringRepository
 from app.services.report import service
 from app.services.report.repository import SqlReportRepository
 from engines.common.db.session import get_db_session
-from engines.contracts.enums import AuditAction, ReportStatus
+from engines.contracts.enums import AuditAction, ReportStatus, ReportType
 from engines.contracts.permissions import Permission
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
@@ -51,16 +51,19 @@ async def list_reports(
     repo=Depends(get_report_repository),
     topic_id: str | None = Query(default=None, max_length=64),
     event_id: str | None = Query(default=None, max_length=64),
+    report_type: ReportType | None = Query(default=None, description="按报告类型筛选"),
     status: ReportStatus | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
 ) -> PageResult[ReportView]:
-    """按主题/事件/状态筛选，按创建时间倒序（FR-57）。列表不返回正文。"""
+    """按主题/事件/类型/状态筛选，按创建时间倒序（FR-57）。列表不返回正文。"""
     query = ReportQuery(page=page, page_size=page_size, topic_id=topic_id,
-                        event_id=event_id, status=status)
+                        event_id=event_id, report_type=report_type, status=status)
     total, items = await service.list_reports(
         repo, page=query.page, page_size=query.page_size, topic_id=query.topic_id,
-        event_id=query.event_id, status=query.status.value if query.status else None)
+        event_id=query.event_id,
+        report_type=query.report_type.value if query.report_type else None,
+        status=query.status.value if query.status else None)
     return paginate(total, [ReportView(**item) for item in items], query.page, query.page_size)
 
 
